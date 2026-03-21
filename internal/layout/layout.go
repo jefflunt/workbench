@@ -7,6 +7,8 @@
 package layout
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -41,6 +43,7 @@ type PaneDims struct {
 //
 // rows is the ordered list of row descriptors from config.toml.
 // views maps provider name → rendered string for this frame.
+// titles maps provider name → title to display in the border.
 // activeProvider is the provider name of the currently focused pane.
 // activeBorderColor is the terminal color used for the active pane border.
 // termW and termH are the current terminal dimensions in cells.
@@ -49,7 +52,7 @@ type PaneDims struct {
 //
 // It also returns a map of provider name → PaneDims so callers can know the
 // usable content height for each pane before rendering.
-func Render(rows []RowConfig, views map[string]string, activeProvider, activeBorderColor string, termW, termH, reservedRows int) (string, map[string]PaneDims) {
+func Render(rows []RowConfig, views map[string]string, titles map[string]string, activeProvider, activeBorderColor string, termW, termH, reservedRows int) (string, map[string]PaneDims) {
 	paneH := termH - reservedRows
 	if paneH < 1 {
 		paneH = 1
@@ -92,14 +95,12 @@ func Render(rows []RowConfig, views map[string]string, activeProvider, activeBor
 			// lipgloss Height() pads the string BEFORE the border is applied,
 			// so Height(h) produces an outer box of h+2 rows (border top+bottom).
 			// We want the outer box to be exactly rowHeight rows, so we pass
-			// rowHeight-2 to Height(). The inner content area is then rowHeight-2
-			// rows; renderPane writes a 1-line header first, leaving rowHeight-3
-			// rows for items.
+			// rowHeight-2 to Height().
 			innerHeight := rowHeight - 2
 			if innerHeight < 1 {
 				innerHeight = 1
 			}
-			contentHeight := innerHeight - 1 // subtract the header row
+			contentHeight := innerHeight
 			if contentHeight < 1 {
 				contentHeight = 1
 			}
@@ -110,19 +111,33 @@ func Render(rows []RowConfig, views map[string]string, activeProvider, activeBor
 			}
 
 			content := views[pane.Provider]
+			title := titles[pane.Provider]
 
 			borderColor := lipgloss.Color("240")
 			if pane.Provider == activeProvider {
 				borderColor = lipgloss.Color(activeBorderColor)
 			}
 
-			styled := lipgloss.NewStyle().
+			border := lipgloss.RoundedBorder()
+			if title != "" {
+				// Inject title into top border: ─ title ─
+				t := " " + title + " "
+				if len(t) < paneWidth-2 {
+					fill := paneWidth - 2 - len(t)
+					left := fill / 2
+					right := fill - left
+					border.Top = strings.Repeat("─", left) + t + strings.Repeat("─", right)
+				}
+			}
+
+			style := lipgloss.NewStyle().
 				Width(paneWidth).
 				Height(innerHeight).
-				Border(lipgloss.RoundedBorder()).
+				Border(border).
 				BorderForeground(borderColor).
-				Padding(0, 1).
-				Render(content)
+				Padding(0, 1)
+
+			styled := style.Render(content)
 
 			renderedPanes = append(renderedPanes, styled)
 		}

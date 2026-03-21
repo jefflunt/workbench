@@ -825,6 +825,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.panes[idx].stale = false
 				m.panes[idx].items = result.items
 				m.panes[idx].err = result.err
+				// Clamp cursor to the new list size
+				if m.panes[idx].cursor >= len(m.panes[idx].items) {
+					m.panes[idx].cursor = len(m.panes[idx].items) - 1
+					if m.panes[idx].cursor < 0 {
+						m.panes[idx].cursor = 0
+					}
+				}
 				// Persist fresh data to cache (best-effort; ignore errors).
 				if result.err == nil && len(result.items) > 0 {
 					_ = cache.Save(result.providerName, result.items)
@@ -1070,16 +1077,36 @@ func (m model) View() string {
 
 	// First pass: compute pane dimensions with placeholder content so we know
 	// each pane's content height before we render the real content.
-	_, dims := layout.Render(layoutRows, map[string]string{}, m.panes[m.active].providerName, m.cfg.Theme.ActivePaneColor, m.termW, m.termH, reservedRows)
+	_, dims := layout.Render(layoutRows, map[string]string{}, map[string]string{}, m.panes[m.active].providerName, m.cfg.Theme.ActivePaneColor, m.termW, m.termH, reservedRows)
 
 	// Second pass: render each pane using its computed content height.
 	views := make(map[string]string, len(m.panes))
+	titles := make(map[string]string, len(m.panes))
 	for i, p := range m.panes {
 		h := 0
 		if d, ok := dims[p.providerName]; ok {
 			h = d.ContentHeight
 		}
 		views[p.providerName] = m.renderPane(i, h)
+
+		// Construct border title
+		title := strings.ToUpper(p.providerName)
+		if m.nowPlayingActive && m.nowPlayingProvider == p.providerName {
+			title = "▶ " + truncate(m.nowPlaying.Title, 40)
+		} else {
+			switch p.searchMode {
+			case "s":
+				title += fmt.Sprintf(" [search: %q %d match(es)]", p.searchQuery, len(p.searchMatches))
+			case "f":
+				count := len(paneMatches(p.items, p.searchQuery))
+				title += fmt.Sprintf(" [filter: %q %d]", p.searchQuery, count)
+			case "F":
+				title += fmt.Sprintf(" [dim: %q]", p.searchQuery)
+			case "pending":
+				title += " [/s search /f filter /F dim]"
+			}
+		}
+		titles[p.providerName] = title
 	}
 
 	// Build footer for the active pane's search state or login mode.
@@ -1113,7 +1140,7 @@ func (m model) View() string {
 		}
 	}
 
-	body, _ := layout.Render(layoutRows, views, m.panes[m.active].providerName, m.cfg.Theme.ActivePaneColor, m.termW, m.termH, reservedRows)
+	body, _ := layout.Render(layoutRows, views, titles, m.panes[m.active].providerName, m.cfg.Theme.ActivePaneColor, m.termW, m.termH, reservedRows)
 
 	var view string
 	if footer != "" {
@@ -1421,33 +1448,8 @@ func (m model) renderPane(idx, contentHeight int) string {
 
 	var sb strings.Builder
 
-	// Header — show search mode indicator when a query is active on this pane.
-	provName := strings.ToUpper(p.providerName)
-	header := provName
-	switch p.searchMode {
-	case "s":
-		header += matchStyle.Render(fmt.Sprintf(" [search: %q  %d match(es)]", p.searchQuery, len(p.searchMatches)))
-	case "f":
-		count := len(paneMatches(p.items, p.searchQuery))
-		header += matchStyle.Render(fmt.Sprintf(" [filter: %q  %d]", p.searchQuery, count))
-	case "F":
-		header += matchStyle.Render(fmt.Sprintf(" [dim: %q]", p.searchQuery))
-	case "pending":
-		header += metaStyle.Render(" [/s search  /f filter  /F dim]")
-	}
-	sb.WriteString(titleStyle.Render(header))
 	if p.stale {
-		sb.WriteString(" " + p.spinner.View())
-	}
-	sb.WriteString("\n")
-
-	if m.nowPlayingActive && m.nowPlayingProvider == p.providerName {
-		title := truncate(m.nowPlaying.Title, 50)
-		sb.WriteString(lipgloss.NewStyle().
-			Foreground(lipgloss.Color("212")).
-			Bold(true).
-			Render("▶ NOW PLAYING: " + title))
-		sb.WriteString("\n")
+		sb.WriteString(p.spinner.View() + " refreshing…\n")
 		if contentHeight > 0 {
 			contentHeight--
 		}
@@ -1483,16 +1485,14 @@ func (m model) renderPane(idx, contentHeight int) string {
 		matchSet[mi] = true
 	}
 
-	// The header row is already accounted for in contentHeight (layout.go
-	// subtracts it). If contentHeight is 0 (placeholder pass) render everything.
+	// contentHeight is what renderPane should fill.
 	itemRows := contentHeight
 	if itemRows < 1 {
 		itemRows = len(items) // unconstrained
 	}
 
 	// If content overflows we'll show a scroll indicator, which itself takes a
-	// row. Reserve that row from the item budget so the total content lines
-	// (header + items + indicator) never exceeds innerHeight.
+	// row. Reserve that row from the item budget.
 	showIndicator := len(items) > itemRows
 	if showIndicator && itemRows > 1 {
 		itemRows--
@@ -1518,19 +1518,14 @@ func (m model) renderPane(idx, contentHeight int) string {
 	}
 	window := items[scrollOffset:end]
 
-	// In /f mode items are pre-filtered, so absIdx is an index into the
-	// filtered slice — not into p.items.  For /s and /F we index into the full
-	// p.items slice so matchSet lookups are correct.
 	filterMode := p.searchMode == "f"
 
 	for i, item := range window {
 		absIdx := scrollOffset + i
 		isCurrent := absIdx == p.cursor && active
 
-		// For match highlighting in non-filter modes we need the original index.
 		var origIdx int
 		if filterMode {
-			// In filter mode, rebuild the original index by scanning p.items.
 			origIdx = -1
 			if q != "" {
 				n := 0
