@@ -148,7 +148,7 @@ type fetchResultMsg struct {
 // playbackStartedMsg is sent when a new music player process has started.
 type playbackStartedMsg struct {
 	cmd          *exec.Cmd
-	item         plugin.Item
+	queue        []plugin.Item
 	providerName string
 }
 
@@ -207,6 +207,7 @@ const (
 	modeHelp
 	modeLogin
 	modeLog
+	modeNowPlaying
 )
 
 // ---------------------------------------------------------------------------
@@ -303,7 +304,8 @@ type model struct {
 
 	// Playback state
 	activePlayer       *exec.Cmd
-	nowPlaying         plugin.Item
+	nowPlayingQueue    []plugin.Item
+	nowPlayingIndex    int
 	nowPlayingActive   bool
 	nowPlayingProvider string
 }
@@ -766,6 +768,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					p.cursor--
 				}
 
+			case " ":
+				if m.activePlayer != nil {
+					sendMPVCommand("cycle", "pause")
+				}
+
 			case "h":
 				if m.activePlayer != nil {
 					sendMPVCommand("playlist-prev")
@@ -805,7 +812,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case playbackStartedMsg:
 		m.activePlayer = msg.cmd
-		m.nowPlaying = msg.item
+		m.nowPlayingQueue = msg.queue
+		m.nowPlayingIndex = 0
 		m.nowPlayingActive = true
 		m.nowPlayingProvider = msg.providerName
 		return m, waitForPlayback(msg.cmd)
@@ -813,6 +821,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case playbackFinishedMsg:
 		if m.activePlayer == msg.cmd {
 			m.activePlayer = nil
+			m.nowPlayingQueue = nil
 			m.nowPlayingActive = false
 			m.nowPlayingProvider = ""
 		}
@@ -908,14 +917,18 @@ func openItem(item plugin.Item, providerName string) tea.Cmd {
 		wblog.Info("main", fmt.Sprintf("openItem: url=%s provider=%s", item.URL, providerName))
 		if strings.HasPrefix(item.URL, "music://") {
 			// Handle custom music:// scheme.
+			queue := []plugin.Item{}
 			targets := []string{}
 
 			if strings.HasPrefix(item.URL, "music://ytm/") {
 				id := strings.TrimPrefix(item.URL, "music://ytm/")
+				queue = append(queue, item)
 				targets = append(targets, "https://music.youtube.com/watch?v="+id)
 			} else if strings.HasPrefix(item.URL, "music://ytm-playlist/") {
+				queue = append(queue, item) // Placeholder for playlist
 				targets = append(targets, strings.TrimPrefix(item.URL, "music://ytm-playlist/"))
 			} else if strings.HasPrefix(item.URL, "music://plex/") {
+				queue = append(queue, item)
 				targets = append(targets, strings.TrimPrefix(item.URL, "music://plex/"))
 			} else if strings.HasPrefix(item.URL, "music://plex-playlist/") {
 				parts := strings.SplitN(strings.TrimPrefix(item.URL, "music://plex-playlist/"), "/", 2)
@@ -936,6 +949,7 @@ func openItem(item plugin.Item, providerName string) tea.Cmd {
 						var pr struct {
 							MediaContainer struct {
 								Metadata []struct {
+									Title string `json:"title"`
 									Media []struct {
 										Part []struct {
 											Key string `json:"key"`
@@ -954,6 +968,7 @@ func openItem(item plugin.Item, providerName string) tea.Cmd {
 								if len(m.Media) > 0 && len(m.Media[0].Part) > 0 {
 									trackURL := fmt.Sprintf("%s%s?X-Plex-Token=%s", serverURL, m.Media[0].Part[0].Key, token)
 									targets = append(targets, trackURL)
+									queue = append(queue, plugin.Item{Title: m.Title, URL: "music://plex/" + trackURL})
 								}
 							}
 							wblog.Info("main", fmt.Sprintf("expanded plex playlist to %d tracks", len(targets)))
@@ -979,7 +994,7 @@ func openItem(item plugin.Item, providerName string) tea.Cmd {
 			}
 			return playbackStartedMsg{
 				cmd:          cmd,
-				item:         item,
+				queue:        queue,
 				providerName: providerName,
 			}
 		}
@@ -1092,7 +1107,7 @@ func (m model) View() string {
 		// Construct border title
 		title := strings.ToUpper(p.providerName)
 		if m.nowPlayingActive && m.nowPlayingProvider == p.providerName {
-			title = "▶ " + truncate(m.nowPlaying.Title, 40)
+			title = "▶ " + truncate(m.nowPlayingQueue[m.nowPlayingIndex].Title, 40)
 		} else {
 			switch p.searchMode {
 			case "s":
@@ -1168,13 +1183,10 @@ func (m model) renderHelpOverlay(base string) string {
 		{"Tab / Shift+Tab", "Switch pane"},
 		{"j / ↓", "Move cursor down"},
 		{"k / ↑", "Move cursor up"},
-		{"J", "Move cursor down 10"},
-		{"K", "Move cursor up 10"},
+		{"J / K", "Cursor ±10"},
 		{"Enter", "Open selected item"},
-		{"h / l", "Prev / next track"},
 		{"R", "Refresh all panes"},
-		{"L then g", "Login: GitHub"},
-		{"L then a", "Login: Jira"},
+		{"L then g/a", "Login (GitHub/Jira)"},
 		{"Ctrl+L", "Open log pane"},
 		{"/s <term>", "Search current pane"},
 		{"/f <term>", "Filter (hide non-match)"},
@@ -1190,48 +1202,41 @@ func (m model) renderHelpOverlay(base string) string {
 		{"/f <term>", "Filter (hide non-match)"},
 		{"/F <term>", "Filter (dim non-match)"},
 		{"n / N", "Next / prev match"},
-		{"w", "Quick-filter: warnings"},
-		{"e", "Quick-filter: errors"},
-		{"i", "Quick-filter: info"},
+		{"w / e / i", "Quick-filter: warn/err/info"},
 	}
 
-	// Build left column (global shortcuts).
-	var left strings.Builder
-	left.WriteString(overlayTitleStyle.Render("Global"))
-	left.WriteString("\n\n")
-	for _, s := range global {
-		key := overlayKeyStyle.Render(fmt.Sprintf("%-18s", s.key))
-		desc := overlayDescStyle.Render(s.desc)
-		left.WriteString(key + "  " + desc + "\n")
+	p := m.panes[m.active]
+	var paneSpecific []struct{ key, desc string }
+	if p.providerName == "music-streamer" || p.providerName == "plex" || p.providerName == "ytmusic" {
+		paneSpecific = []struct{ key, desc string }{
+			{"Space", "Play / Pause"},
+			{"h / l", "Prev / next track"},
+		}
 	}
 
-	// Build right column (log pane shortcuts).
-	var right strings.Builder
-	right.WriteString(overlayTitleStyle.Render("Log Pane"))
-	right.WriteString("\n\n")
-	for _, s := range logPane {
-		key := overlayKeyStyle.Render(fmt.Sprintf("%-18s", s.key))
-		desc := overlayDescStyle.Render(s.desc)
-		right.WriteString(key + "  " + desc + "\n")
+	// Helper to build a section.
+	buildSection := func(title string, items []struct{ key, desc string }) string {
+		var sb strings.Builder
+		sb.WriteString(overlayTitleStyle.Render(title))
+		sb.WriteString("\n\n")
+		for _, s := range items {
+			key := overlayKeyStyle.Render(fmt.Sprintf("%-18s", s.key))
+			desc := overlayDescStyle.Render(s.desc)
+			sb.WriteString(key + "  " + desc + "\n")
+		}
+		return sb.String()
 	}
 
-	// Pad the shorter column so lipgloss.JoinHorizontal aligns them.
-	leftLines := strings.Count(left.String(), "\n")
-	rightLines := strings.Count(right.String(), "\n")
-	for leftLines < rightLines {
-		left.WriteString("\n")
-		leftLines++
-	}
-	for rightLines < leftLines {
-		right.WriteString("\n")
-		rightLines++
+	globalSection := buildSection("Global", global)
+	logSection := buildSection("Log Pane", logPane)
+	paneSection := ""
+	if len(paneSpecific) > 0 {
+		paneSection = buildSection(strings.ToUpper(p.providerName), paneSpecific)
 	}
 
-	cols := lipgloss.JoinHorizontal(lipgloss.Top,
-		left.String(),
-		"    ",
-		right.String(),
-	)
+	// Layout into columns.
+	top := lipgloss.JoinHorizontal(lipgloss.Top, globalSection, "    ", logSection)
+	cols := lipgloss.JoinVertical(lipgloss.Left, top, "\n", paneSection)
 
 	var sb strings.Builder
 	sb.WriteString(overlayTitleStyle.Render("Keyboard Shortcuts"))
