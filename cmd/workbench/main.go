@@ -3,8 +3,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -821,21 +824,69 @@ func openItem(item plugin.Item) tea.Cmd {
 	return func() tea.Msg {
 		if strings.HasPrefix(item.URL, "music://") {
 			// Handle custom music:// scheme.
-			target := item.URL
+			targets := []string{}
+
 			if strings.HasPrefix(item.URL, "music://ytm/") {
 				// music://ytm/ID -> YouTube Music URL
-				target = "https://music.youtube.com/watch?v=" + strings.TrimPrefix(item.URL, "music://ytm/")
+				targets = append(targets, "https://music.youtube.com/watch?v="+strings.TrimPrefix(item.URL, "music://ytm/"))
 			} else if strings.HasPrefix(item.URL, "music://plex/") {
 				// music://plex/URL -> Raw Plex Stream URL
-				target = strings.TrimPrefix(item.URL, "music://plex/")
+				targets = append(targets, strings.TrimPrefix(item.URL, "music://plex/"))
+			} else if strings.HasPrefix(item.URL, "music://plex-playlist/") {
+				// music://plex-playlist/ENCODED_SERVER_URL/REL_PATH -> Expand tracks
+				parts := strings.SplitN(strings.TrimPrefix(item.URL, "music://plex-playlist/"), "/", 2)
+				if len(parts) == 2 {
+					serverURL, _ := url.QueryUnescape(parts[0])
+					relPath := parts[1]
+					fullURL := serverURL + "/" + relPath
+
+					// Fetch playlist items
+					client := &http.Client{Timeout: 10 * time.Second}
+					req, _ := http.NewRequest("GET", fullURL, nil)
+					req.Header.Set("Accept", "application/json")
+					resp, err := client.Do(req)
+					if err == nil {
+						defer resp.Body.Close()
+						var pr struct {
+							MediaContainer struct {
+								Metadata []struct {
+									Media []struct {
+										Part []struct {
+											Key string `json:"key"`
+										} `json:"part"`
+									} `json:"media"`
+								} `json:"metadata"`
+							} `json:"MediaContainer"`
+						}
+						if err := json.NewDecoder(resp.Body).Decode(&pr); err == nil {
+							// Extract X-Plex-Token from fullURL
+							u, _ := url.Parse(fullURL)
+							token := u.Query().Get("X-Plex-Token")
+
+							for _, m := range pr.MediaContainer.Metadata {
+								if len(m.Media) > 0 && len(m.Media[0].Part) > 0 {
+									trackURL := fmt.Sprintf("%s%s?X-Plex-Token=%s", serverURL, m.Media[0].Part[0].Key, token)
+									targets = append(targets, trackURL)
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if len(targets) == 0 {
+				return nil
 			}
 
 			// Run mpv in the background for audio playback.
-			cmd := exec.Command("mpv", "--no-video", target)
+			args := append([]string{"--no-video"}, targets...)
+			cmd := exec.Command("mpv", args...)
 			if err := cmd.Start(); err != nil {
 				wblog.Error("main", fmt.Sprintf("mpv failed: %v", err))
+				// We don't have a way to show a popup error easily here without
+				// changing the model state, but we can at least log it.
 			} else {
-				wblog.Info("main", fmt.Sprintf("playing music via mpv: %s", target))
+				wblog.Info("main", fmt.Sprintf("playing %d item(s) via mpv", len(targets)))
 				go func() { _ = cmd.Wait() }()
 			}
 			return nil

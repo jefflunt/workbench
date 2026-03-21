@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/jluntpcty/workbench/internal/plugin"
 )
@@ -28,13 +30,39 @@ func fetch(cfg map[string]any) ([]plugin.Item, error) {
 	query, _ := cfg["query"].(string)
 	fmt.Fprintf(os.Stderr, "ytmusic: fetching with query %q\n", query)
 
-	if query == "" {
-		// Default to some popular music or similar if no query.
-		// For now we'll just return nothing until the user searches.
-		return nil, nil
+	if query != "" {
+		return performSearch(query)
 	}
 
-	return performSearch(query)
+	// Default: Check if yt-dlp is available and connection works
+	if _, err := exec.LookPath("yt-dlp"); err != nil {
+		return []plugin.Item{{
+			Title:       "YouTube Music",
+			Subtitle:    "yt-dlp not found",
+			Meta:        "ERROR",
+			Highlighted: true,
+		}}, nil
+	}
+
+	// Check if we can reach google.com (a proxy for connection)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get("https://www.google.com")
+	if err != nil {
+		return []plugin.Item{{
+			Title:       "YouTube Music",
+			Subtitle:    "Network error",
+			Meta:        "ERROR",
+			Highlighted: true,
+		}}, nil
+	}
+	defer resp.Body.Close()
+
+	return []plugin.Item{{
+		Title:       "YouTube Music",
+		Subtitle:    "Connected",
+		Meta:        "OK",
+		Highlighted: false,
+	}}, nil
 }
 
 func performSearch(query string) ([]plugin.Item, error) {

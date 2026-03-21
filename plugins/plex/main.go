@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/jluntpcty/workbench/internal/plugin"
 )
@@ -55,10 +56,7 @@ func fetch(cfg map[string]any) ([]plugin.Item, error) {
 		var err error
 		sectionID, err = findSectionID(serverURL, token, library)
 		if err != nil {
-			return nil, err
-		}
-		if sectionID == "" {
-			return nil, fmt.Errorf("plex: library %q not found", library)
+			fmt.Fprintf(os.Stderr, "plex: error finding library %q: %v\n", library, err)
 		}
 	}
 
@@ -66,7 +64,66 @@ func fetch(cfg map[string]any) ([]plugin.Item, error) {
 		return performSearch(serverURL, token, query, sectionID)
 	}
 
-	return fetchPlaylists(serverURL, token)
+	// Default: Check connectivity and return playlists
+	err := checkPlexConnection(serverURL, token)
+	if err != nil {
+		return []plugin.Item{{
+			Title:       "Plex",
+			Subtitle:    "Connection Error",
+			Meta:        "ERROR",
+			URL:         "",
+			Highlighted: true,
+		}}, nil
+	}
+
+	playlists, err := fetchPlaylists(serverURL, token)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "plex: error fetching playlists: %v\n", err)
+	}
+
+	status := "OK"
+	if library != "" {
+		if sectionID != "" {
+			status = fmt.Sprintf("OK (%s)", library)
+		} else {
+			status = fmt.Sprintf("OK (Library %q not found)", library)
+		}
+	}
+
+	// Add status as the first item
+	items := []plugin.Item{{
+		Title:       "Plex Server",
+		Subtitle:    "Connected",
+		Meta:        status,
+		URL:         "",
+		Highlighted: false,
+	}}
+	items = append(items, playlists...)
+
+	return items, nil
+}
+
+func checkPlexConnection(serverURL, token string) error {
+	u, _ := url.Parse(serverURL)
+	u.Path = "/"
+	q := u.Query()
+	q.Set("X-Plex-Token", token)
+	u.RawQuery = q.Encode()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, _ := http.NewRequest("GET", u.String(), nil)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func findSectionID(serverURL, token, name string) (string, error) {
@@ -140,15 +197,11 @@ func fetchPlaylists(serverURL, token string) ([]plugin.Item, error) {
 
 	var items []plugin.Item
 	for _, m := range resp.MediaContainer.Metadata {
-		// Note: Plex playlists need to be expanded to their tracks,
-		// but for a single entry we'll return the playlist item.
-		// In a real implementation we might want a custom music://plex-playlist/...
-		// that mpv handles by expanding, but for now we'll just return the entries.
 		items = append(items, plugin.Item{
 			Title:    m.Title,
 			Subtitle: "Playlist",
 			Meta:     "Plex",
-			URL:      "", // We'd need an endpoint for the playlist's tracks to play them all
+			URL:      fmt.Sprintf("music://plex-playlist/%s/%s/items?X-Plex-Token=%s", url.PathEscape(serverURL), m.RatingKey, token),
 		})
 	}
 	return items, nil
