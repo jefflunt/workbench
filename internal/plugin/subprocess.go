@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+
+	wblog "github.com/jluntpcty/workbench/internal/log"
 )
 
 // SubprocessProvider implements Provider by spawning a plugin binary as a
@@ -65,16 +67,20 @@ func (p *SubprocessProvider) Fetch(ctx context.Context, query string) ([]Item, e
 	if err := cmd.Run(); err != nil {
 		stderrStr := stderr.String()
 		if stderrStr != "" {
+			wblog.Error(p.name, fmt.Sprintf("stderr: %s", stderrStr))
 			return nil, fmt.Errorf("plugin %s: %s", p.name, stderrStr)
 		}
+		wblog.Error(p.name, fmt.Sprintf("failed: %v", err))
 		return nil, fmt.Errorf("plugin %s: %w", p.name, err)
 	}
 
 	var resp FetchResponse
 	if err := json.NewDecoder(&stdout).Decode(&resp); err != nil {
+		wblog.Error(p.name, fmt.Sprintf("failed to decode response: %v", err))
 		return nil, fmt.Errorf("plugin %s: decode response: %w", p.name, err)
 	}
 	if resp.Error != "" {
+		wblog.Error(p.name, fmt.Sprintf("reported error: %s", resp.Error))
 		return nil, fmt.Errorf("plugin %s: %s", p.name, resp.Error)
 	}
 

@@ -32,6 +32,13 @@ func RunPlugin(fetch func(cfg map[string]any) ([]Item, error)) {
 		os.Exit(1)
 	}
 
+	if req.Config == nil {
+		req.Config = make(map[string]any)
+	}
+	if req.Query != "" {
+		req.Config["query"] = req.Query
+	}
+
 	items, err := fetch(req.Config)
 
 	resp := FetchResponse{Items: items}

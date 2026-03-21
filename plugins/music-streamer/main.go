@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -67,8 +68,10 @@ func fetch(cfg map[string]any) ([]plugin.Item, error) {
 		allItems = append(allItems, res...)
 	}
 
-	// We'll report the first error if any, or just return items.
-	// In a real meta-plugin we might want to return partial results.
+	for err := range errors {
+		fmt.Fprintf(os.Stderr, "music-streamer: backend error: %v\n", err)
+	}
+
 	return allItems, nil
 }
 
