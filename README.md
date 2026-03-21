@@ -202,6 +202,12 @@ On startup, cached data is displayed immediately while fresh data loads in the b
 | `L` then `g` | Login: GitHub (`gh auth login`) |
 | `L` then `a` | Login: Atlassian / Jira (`acli jira auth login`) |
 | `Ctrl+L` | Open log pane |
+| `Space` | Play / Pause (music) |
+| `h` | Previous track (music) |
+| `l` | Next track (music) |
+| `s` | Shuffle (music) |
+| `a` | Add to Queue (music) |
+| `n` | Now Playing / Queue (music) |
 
 ### Search and filter (per pane)
 

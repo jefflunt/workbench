@@ -1,31 +1,26 @@
 # Providers
 
-## The Contract
+---
+
+## Music Streamer Provider (`internal/music-streamer`)
+
+**What it does:** Aggregates music services (like `ytmusic`, `plex`) into a single pane.
 
 ```go
-// internal/provider/provider.go
-type Item struct {
-    Title       string
-    Subtitle    string
-    Meta        string
-    URL         string
-    Highlighted bool  // renders in highlightedStyle (red)
-}
-
-type Provider interface {
-    Name() string
-    Fetch(ctx context.Context, query string) ([]Item, error)
+type Backend struct {
+    Name   string
+    Path   string
+    Config map[string]any
 }
 ```
 
-**Rules for implementors:**
-- `Name()` must exactly match the string used in `config.toml` pane `provider` fields. It is also the cache filename key and the `paneIndex` map key.
-- `Fetch` is called concurrently with all other providers, with a 30-second context deadline. Respect cancellation.
-- `query` is an optional search term. If non-empty, the provider should return live search results instead of its default item list.
-- Return `nil, error` on total failure — do not mix partial results with a non-nil error (the caller takes the whole slice or nothing).
-- `Highlighted: true` means the item gets red rendering and sorts visually "urgent". Use it for unread email, review-requested PRs, high-priority notifications.
+**Fetch behaviour:**
+1. Iterates over backends defined in `[plugins.music-streamer]`.
+2. Runs each backend as a subprocess with `fetch` command.
+3. Concurrently fetches from all backends and aggregates results.
 
----
+**Auth:** Delegated to each backend plugin.
+
 
 ## Apple Mail Provider (`internal/applemail`)
 

@@ -89,7 +89,17 @@ Note: `modeSearch` was removed. Search is now **per-pane** and operates within `
 |-----|--------|
 | `?` | Toggle help overlay (saves current mode; any key restores it) |
 
-### Normal mode — navigation
+### Normal mode — music playback
+Only works when music is playing (`activePlayer != nil`).
+
+| Key | Action |
+|-----|--------|
+| `Space` | Play / Pause |
+| `h` | Previous track |
+| `l` | Next track |
+| `s` | Shuffle (only on `music-streamer`, `plex`, `ytmusic` panes) |
+| `a` | Add to Queue (only on `music-streamer`, `plex`, `ytmusic` panes) |
+| `n` | Open Now Playing (Queue) overlay |
 
 | Key | Action |
 |-----|--------|
