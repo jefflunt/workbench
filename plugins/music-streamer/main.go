@@ -30,14 +30,16 @@ func fetch(cfg map[string]any) ([]plugin.Item, error) {
 	}
 
 	query, _ := cfg["query"].(string)
+	fmt.Fprintf(os.Stderr, "music-streamer: received query %q, found %d backends\n", query, len(backendsData))
 
 	var wg sync.WaitGroup
 	results := make(chan []plugin.Item, len(backendsData))
 	errors := make(chan error, len(backendsData))
 
-	for _, bd := range backendsData {
+	for i, bd := range backendsData {
 		bMap, ok := bd.(map[string]any)
 		if !ok {
+			fmt.Fprintf(os.Stderr, "music-streamer: backend %d is not a map\n", i)
 			continue
 		}
 
@@ -47,13 +49,17 @@ func fetch(cfg map[string]any) ([]plugin.Item, error) {
 			Config: bMap["config"].(map[string]any),
 		}
 
+		fmt.Fprintf(os.Stderr, "music-streamer: calling backend %s at %s\n", backend.Name, backend.Path)
+
 		wg.Add(1)
 		go func(b Backend) {
 			defer wg.Done()
 			items, err := callBackend(b, query)
 			if err != nil {
+				fmt.Fprintf(os.Stderr, "music-streamer: backend %s error: %v\n", b.Name, err)
 				errors <- fmt.Errorf("%s: %w", b.Name, err)
 			} else {
+				fmt.Fprintf(os.Stderr, "music-streamer: backend %s returned %d items\n", b.Name, len(items))
 				results <- items
 			}
 		}(backend)
@@ -68,10 +74,7 @@ func fetch(cfg map[string]any) ([]plugin.Item, error) {
 		allItems = append(allItems, res...)
 	}
 
-	for err := range errors {
-		fmt.Fprintf(os.Stderr, "music-streamer: backend error: %v\n", err)
-	}
-
+	fmt.Fprintf(os.Stderr, "music-streamer: total items collected: %d\n", len(allItems))
 	return allItems, nil
 }
 

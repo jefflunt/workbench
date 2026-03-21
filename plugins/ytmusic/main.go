@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -25,6 +26,7 @@ func main() {
 
 func fetch(cfg map[string]any) ([]plugin.Item, error) {
 	query, _ := cfg["query"].(string)
+	fmt.Fprintf(os.Stderr, "ytmusic: fetching with query %q\n", query)
 
 	if query == "" {
 		// Default to some popular music or similar if no query.

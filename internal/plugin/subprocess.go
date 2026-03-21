@@ -64,10 +64,14 @@ func (p *SubprocessProvider) Fetch(ctx context.Context, query string) ([]Item, e
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
-		stderrStr := stderr.String()
+	err = cmd.Run()
+	stderrStr := stderr.String()
+	if stderrStr != "" {
+		wblog.Info(p.name, fmt.Sprintf("stderr: %s", stderrStr))
+	}
+
+	if err != nil {
 		if stderrStr != "" {
-			wblog.Error(p.name, fmt.Sprintf("stderr: %s", stderrStr))
 			return nil, fmt.Errorf("plugin %s: %s", p.name, stderrStr)
 		}
 		wblog.Error(p.name, fmt.Sprintf("failed: %v", err))

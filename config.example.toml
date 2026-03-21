@@ -36,6 +36,8 @@ limit = 50
 # Plex server URL and Token (from Plex settings or browser URL)
 server_url = "http://192.168.1.100:32400"
 token      = "abcdef123456"
+# (Optional) Library name to search within (e.g. "Music")
+# library    = "Music"
 
 [plugins.ytmusic]
 # Uses `yt-dlp` for searching and streaming. No config needed if yt-dlp is in PATH.

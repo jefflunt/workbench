@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
 
 	"github.com/jluntpcty/workbench/internal/plugin"
 )
@@ -12,11 +14,16 @@ import (
 // PlexResponse is a simplified Plex API response.
 type PlexResponse struct {
 	MediaContainer struct {
+		Directory []struct {
+			Key   string `json:"key"`
+			Title string `json:"title"`
+		} `json:"Directory"`
 		Metadata []struct {
 			RatingKey        string `json:"ratingKey"`
 			Title            string `json:"title"`
 			ParentTitle      string `json:"parentTitle"`      // Album
 			GrandparentTitle string `json:"grandparentTitle"` // Artist
+			LibrarySectionID int    `json:"librarySectionID"`
 			Type             string `json:"type"`
 			Media            []struct {
 				Part []struct {
@@ -34,23 +41,61 @@ func main() {
 func fetch(cfg map[string]any) ([]plugin.Item, error) {
 	serverURL, _ := cfg["server_url"].(string)
 	token, _ := cfg["token"].(string)
+	library, _ := cfg["library"].(string)
 
 	if serverURL == "" || token == "" {
 		return nil, fmt.Errorf("plex: server_url and token are required in [plugins.plex]")
 	}
 
 	query, _ := cfg["query"].(string)
+	fmt.Fprintf(os.Stderr, "plex: fetching with query %q, library %q\n", query, library)
+
+	sectionID := ""
+	if library != "" {
+		var err error
+		sectionID, err = findSectionID(serverURL, token, library)
+		if err != nil {
+			return nil, err
+		}
+		if sectionID == "" {
+			return nil, fmt.Errorf("plex: library %q not found", library)
+		}
+	}
+
 	if query != "" {
-		return performSearch(serverURL, token, query)
+		return performSearch(serverURL, token, query, sectionID)
 	}
 
 	return fetchPlaylists(serverURL, token)
 }
 
-func performSearch(serverURL, token, query string) ([]plugin.Item, error) {
-	// Search for tracks (type 10)
+func findSectionID(serverURL, token, name string) (string, error) {
 	u, _ := url.Parse(serverURL)
-	u.Path = "/search"
+	u.Path = "/library/sections"
+	q := u.Query()
+	q.Set("X-Plex-Token", token)
+	u.RawQuery = q.Encode()
+
+	resp, err := getPlex(u.String())
+	if err != nil {
+		return "", err
+	}
+
+	for _, d := range resp.MediaContainer.Directory {
+		if strings.EqualFold(d.Title, name) {
+			return d.Key, nil
+		}
+	}
+	return "", nil
+}
+
+func performSearch(serverURL, token, query, sectionID string) ([]plugin.Item, error) {
+	u, _ := url.Parse(serverURL)
+	if sectionID != "" {
+		u.Path = fmt.Sprintf("/library/sections/%s/search", sectionID)
+	} else {
+		u.Path = "/search"
+	}
 	q := u.Query()
 	q.Set("query", query)
 	q.Set("type", "10")
