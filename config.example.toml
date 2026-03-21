@@ -1,0 +1,73 @@
+# workbench example configuration
+# Copy this file to ~/.config/workbench/config.toml and customise as needed.
+
+# ---------------------------------------------------------------------------
+# Plugin configuration
+# ---------------------------------------------------------------------------
+# Each [plugins.<name>] section configures a plugin binary discovered in
+# ~/.config/workbench/plugins/.  The keys and values are plugin-specific.
+
+[plugins.applemail]
+# Mail.app account description (Mail.app → Settings → Accounts → Description).
+# The first run will trigger a one-time macOS Automation permission dialog.
+account_name = "Exchange"
+limit        = 50
+
+[plugins.github]
+# Personal access token with read:org and repo scopes.
+# When empty, workbench falls back to the authenticated `gh` CLI.
+token = ""
+
+[plugins.jira]
+# JQL for tickets assigned to you, newest first.
+assigned_jql = "assignee = currentUser() ORDER BY updated DESC"
+
+# JQL for tickets you are watching that need follow-up.
+watching_jql = "watcher = currentUser() AND status in ('In Review', 'Blocked')"
+
+# Maximum results per query.
+limit = 50
+
+# ---------------------------------------------------------------------------
+# Theme
+# ---------------------------------------------------------------------------
+
+[theme]
+# Border color of the active (focused) pane.
+# Accepts ANSI 256-color codes (e.g. "212") or hex colors (e.g. "#ff87d7").
+active_pane_color = "212"
+
+# ---------------------------------------------------------------------------
+# Log
+# ---------------------------------------------------------------------------
+
+[log]
+# Maximum number of log lines retained in memory and on disk.
+# At 100 chars per line this is ~95 MB.  Defaults to 1,000,000.
+# max_lines = 1000000
+
+# ---------------------------------------------------------------------------
+# Layout
+# ---------------------------------------------------------------------------
+
+[layout]
+
+  # Row 0: applemail takes 40%, github takes 60% of the top half of the screen.
+  [[layout.row]]
+  weight = 1  # 50% of vertical space
+
+    [[layout.row.pane]]
+    provider = "applemail"
+    weight   = 2  # 2/(2+3) = 40% of horizontal space
+
+    [[layout.row.pane]]
+    provider = "github"
+    weight   = 3  # 3/(2+3) = 60% of horizontal space
+
+  # Row 1: jira spans the full bottom half.
+  [[layout.row]]
+  weight = 1  # 50% of vertical space
+
+    [[layout.row.pane]]
+    provider = "jira"
+    weight   = 1  # only pane in row; 100% of horizontal space

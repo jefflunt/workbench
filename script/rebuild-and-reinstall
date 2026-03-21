@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+PLUGINS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/workbench/plugins"
+
+echo "==> Running tests…"
+go test ./...
+
+echo "==> Building workbench…"
+go build ./cmd/workbench
+
+echo "==> Building plugins…"
+go build ./plugins/...
+
+echo "==> Installing workbench…"
+go install ./cmd/workbench
+
+echo "==> Installing plugins to ${PLUGINS_DIR}…"
+mkdir -p "$PLUGINS_DIR"
+for plugin_dir in plugins/*/; do
+  name="$(basename "$plugin_dir")"
+  go build -o "${PLUGINS_DIR}/${name}" "./${plugin_dir}"
+  echo "    installed ${name}"
+done
+
+echo "==> Done. $(which workbench)"
