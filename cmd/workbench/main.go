@@ -773,6 +773,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					sendMPVCommand("cycle", "pause")
 				}
 
+			case "s":
+				items := m.visibleItems(m.active)
+				if p.cursor >= 0 && p.cursor < len(items) {
+					item := items[p.cursor]
+					if strings.HasPrefix(item.URL, "music://") {
+						item.URL = strings.Replace(item.URL, "music://", "music-shuffle://", 1)
+						if m.activePlayer != nil {
+							_ = m.activePlayer.Process.Kill()
+							m.activePlayer = nil
+							m.nowPlayingActive = false
+						}
+						if cmd := openItem(item, p.providerName); cmd != nil {
+							return m, cmd
+						}
+					}
+				}
+
 			case "h":
 				if m.activePlayer != nil {
 					sendMPVCommand("playlist-prev")
@@ -781,6 +798,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "l":
 				if m.activePlayer != nil {
 					sendMPVCommand("playlist-next")
+				}
+
+			case "Q":
+				if p.providerName == "music-streamer" || p.providerName == "plex" || p.providerName == "ytmusic" {
+					m.mode = modeNowPlaying
 				}
 
 			case "J":
@@ -915,23 +937,29 @@ func openItem(item plugin.Item, providerName string) tea.Cmd {
 	}
 	return func() tea.Msg {
 		wblog.Info("main", fmt.Sprintf("openItem: url=%s provider=%s", item.URL, providerName))
-		if strings.HasPrefix(item.URL, "music://") {
-			// Handle custom music:// scheme.
+		if strings.HasPrefix(item.URL, "music://") || strings.HasPrefix(item.URL, "music-shuffle://") {
+			// Handle custom music:// or music-shuffle:// scheme.
+			isShuffle := strings.HasPrefix(item.URL, "music-shuffle://")
+			urlBase := "music://"
+			if isShuffle {
+				urlBase = "music-shuffle://"
+			}
+
 			queue := []plugin.Item{}
 			targets := []string{}
 
-			if strings.HasPrefix(item.URL, "music://ytm/") {
-				id := strings.TrimPrefix(item.URL, "music://ytm/")
+			if strings.HasPrefix(item.URL, urlBase+"ytm/") {
+				id := strings.TrimPrefix(item.URL, urlBase+"ytm/")
 				queue = append(queue, item)
 				targets = append(targets, "https://music.youtube.com/watch?v="+id)
-			} else if strings.HasPrefix(item.URL, "music://ytm-playlist/") {
+			} else if strings.HasPrefix(item.URL, urlBase+"ytm-playlist/") {
 				queue = append(queue, item) // Placeholder for playlist
-				targets = append(targets, strings.TrimPrefix(item.URL, "music://ytm-playlist/"))
-			} else if strings.HasPrefix(item.URL, "music://plex/") {
+				targets = append(targets, strings.TrimPrefix(item.URL, urlBase+"ytm-playlist/"))
+			} else if strings.HasPrefix(item.URL, urlBase+"plex/") {
 				queue = append(queue, item)
-				targets = append(targets, strings.TrimPrefix(item.URL, "music://plex/"))
-			} else if strings.HasPrefix(item.URL, "music://plex-playlist/") {
-				parts := strings.SplitN(strings.TrimPrefix(item.URL, "music://plex-playlist/"), "/", 2)
+				targets = append(targets, strings.TrimPrefix(item.URL, urlBase+"plex/"))
+			} else if strings.HasPrefix(item.URL, urlBase+"plex-playlist/") {
+				parts := strings.SplitN(strings.TrimPrefix(item.URL, urlBase+"plex-playlist/"), "/", 2)
 				if len(parts) == 2 {
 					serverURL, _ := url.QueryUnescape(parts[0])
 					relPath := parts[1]
@@ -985,6 +1013,9 @@ func openItem(item plugin.Item, providerName string) tea.Cmd {
 			// Run mpv in the background for audio playback.
 			socketPath := filepath.Join(os.TempDir(), "workbench-mpv.sock")
 			args := []string{"--no-video", "--input-ipc-server=" + socketPath}
+			if isShuffle {
+				args = append(args, "--shuffle")
+			}
 			args = append(args, targets...)
 			wblog.Info("main", fmt.Sprintf("spawning mpv with %d targets", len(targets)))
 			cmd := exec.Command("mpv", args...)
@@ -1171,6 +1202,9 @@ func (m model) View() string {
 	if m.mode == modeLog {
 		view = m.renderLogOverlay(view)
 	}
+	if m.mode == modeNowPlaying {
+		view = m.renderQueueOverlay(view)
+	}
 
 	return view
 }
@@ -1211,6 +1245,8 @@ func (m model) renderHelpOverlay(base string) string {
 		paneSpecific = []struct{ key, desc string }{
 			{"Space", "Play / Pause"},
 			{"h / l", "Prev / next track"},
+			{"s", "Shuffle"},
+			{"Q", "View Playback Queue"},
 		}
 	}
 
@@ -1433,6 +1469,44 @@ func (m model) renderLogOverlay(base string) string {
 		BorderForeground(lipgloss.Color("212")).
 		Width(innerW).
 		Height(boxH - 2).
+		Render(sb.String())
+
+	return lipgloss.Place(
+		m.termW, m.termH,
+		lipgloss.Center, lipgloss.Center,
+		box,
+		lipgloss.WithWhitespaceChars(" "),
+		lipgloss.WithWhitespaceForeground(lipgloss.AdaptiveColor{Light: "0", Dark: "0"}),
+	)
+}
+
+// renderQueueOverlay renders the current playback queue as a centered overlay.
+func (m model) renderQueueOverlay(base string) string {
+	boxW := m.termW * 60 / 100
+	boxH := m.termH * 60 / 100
+
+	var sb strings.Builder
+	sb.WriteString(overlayTitleStyle.Render("Now Playing Queue") + "\n\n")
+
+	if !m.nowPlayingActive || len(m.nowPlayingQueue) == 0 {
+		sb.WriteString(normalStyle.Render("Queue is empty."))
+	} else {
+		for i, item := range m.nowPlayingQueue {
+			prefix := "  "
+			if i == m.nowPlayingIndex {
+				prefix = "▶ "
+			}
+			sb.WriteString(prefix + truncate(item.Title, 50) + "\n")
+		}
+	}
+
+	sb.WriteString("\n\n" + metaStyle.Render("press esc to close"))
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("212")).
+		Width(boxW).
+		Height(boxH).
 		Render(sb.String())
 
 	return lipgloss.Place(
