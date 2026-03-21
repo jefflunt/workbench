@@ -163,6 +163,11 @@ type playbackStartedMsg struct {
 // playbackFinishedMsg is sent when a music player process exits.
 type playbackFinishedMsg struct{ cmd *exec.Cmd }
 
+// mpvTrackChangedMsg is sent when the mpv playlist index changes.
+type mpvTrackChangedMsg struct {
+	index int
+}
+
 // loginDoneMsg is sent after a sub-shell login command exits.
 type loginDoneMsg struct{ err error }
 
@@ -511,39 +516,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-		case modeNowPlaying:
-			switch msg.String() {
-			case "esc":
-				m.mode = modeNormal
-			case "j", "down":
-				if m.nowPlayingIndex < len(m.nowPlayingQueue)-1 {
-					m.nowPlayingIndex++
-				}
-			case "k", "up":
-				if m.nowPlayingIndex > 0 {
-					m.nowPlayingIndex--
-				}
-			case " ":
-				if m.activePlayer != nil {
-					sendMPVCommand("cycle", "pause")
-				}
-			case "h":
-				if m.activePlayer != nil {
-					sendMPVCommand("playlist-prev")
-					m.updateNowPlayingIndex(-1)
-				}
-			case "l":
-				if m.activePlayer != nil {
-					sendMPVCommand("playlist-next")
-					m.updateNowPlayingIndex(1)
-				}
-			case "enter":
-				if m.activePlayer != nil {
-					sendMPVCommand("playlist-play-index", fmt.Sprintf("%d", m.nowPlayingIndex))
-				}
-			}
-			return m, nil
-
 		case modeLog:
 			// If we're in a sub-mode (search/filter input), route to it first.
 			if m.logSearchMode != "" && m.logInput.Focused() {
@@ -672,6 +644,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case modeNowPlaying:
+			switch msg.String() {
+			case "esc":
+				m.mode = modeNormal
+			case "j", "down":
+				if m.nowPlayingIndex < len(m.nowPlayingQueue)-1 {
+					m.nowPlayingIndex++
+				}
+			case "k", "up":
+				if m.nowPlayingIndex > 0 {
+					m.nowPlayingIndex--
+				}
+			case " ":
+				if m.activePlayer != nil {
+					sendMPVCommand("cycle", "pause")
+				}
+			case "h":
+				if m.activePlayer != nil {
+					sendMPVCommand("playlist-prev")
+					m.updateNowPlayingIndex(-1)
+				}
+			case "l":
+				if m.activePlayer != nil {
+					sendMPVCommand("playlist-next")
+					m.updateNowPlayingIndex(1)
+				}
+			case "enter":
+				if m.activePlayer != nil {
+					sendMPVCommand("playlist-play-index", fmt.Sprintf("%d", m.nowPlayingIndex+1))
+				}
+			}
+			return m, nil
+
 		case modeNormal:
 			p := &m.panes[m.active]
 
@@ -769,8 +774,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					p.searchCursor = 0
 					p.searchInput.SetValue("")
 					p.searchInput.Blur()
-				} else if m.mode == modeNowPlaying {
-					m.mode = modeNormal
 				}
 
 			case "enter":
@@ -795,17 +798,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case "M":
-				if p.searchMode == "s" && len(p.searchMatches) > 0 {
-					p.searchCursor = (p.searchCursor - 1 + len(p.searchMatches)) % len(p.searchMatches)
-					p.cursor = p.searchMatches[p.searchCursor]
-				}
-
-			case "n":
-				if p.providerName == "music-streamer" || p.providerName == "plex" || p.providerName == "ytmusic" {
-					m.mode = modeNowPlaying
-				}
-
-			case "N":
 				if p.searchMode == "s" && len(p.searchMatches) > 0 {
 					p.searchCursor = (p.searchCursor - 1 + len(p.searchMatches)) % len(p.searchMatches)
 					p.cursor = p.searchMatches[p.searchCursor]
@@ -844,17 +836,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.activePlayer != nil {
 					sendMPVCommand("cycle", "pause")
 				} else if m.savedPlayback != nil {
-					// Resume
+					wblog.Info("main", "resuming playback from saved state")
 					state := m.savedPlayback
 					m.savedPlayback = nil
 
-					// Re-trigger playback from saved state
-					// Simplified resume: start from index 0
-					item := state.Queue[state.Index]
-					// Add start time to URL for resume?
-					// For now just playing the item.
-					if cmd := openItem(item, state.ProviderName); cmd != nil {
-						return m, cmd
+					// Trigger playback
+					if len(state.Queue) > state.Index {
+						item := state.Queue[state.Index]
+						if cmd := openItem(item, state.ProviderName); cmd != nil {
+							return m, cmd
+						}
 					}
 				}
 
@@ -885,7 +876,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					sendMPVCommand("playlist-next")
 				}
 
-			case "Q":
+			case "n":
 				if p.providerName == "music-streamer" || p.providerName == "plex" || p.providerName == "ytmusic" {
 					m.mode = modeNowPlaying
 				}
@@ -986,6 +977,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *model) updateNowPlayingIndex(delta int) {
+	m.nowPlayingIndex += delta
+	if m.nowPlayingIndex < 0 {
+		m.nowPlayingIndex = 0
+	} else if m.nowPlayingIndex >= len(m.nowPlayingQueue) {
+		m.nowPlayingIndex = len(m.nowPlayingQueue) - 1
+	}
+}
+
 // runLoginCmd suspends the TUI, runs the given command interactively in the
 // user's terminal, then resumes the TUI and reports any error.
 func runLoginCmd(name string, args ...string) tea.Cmd {
@@ -1059,7 +1059,6 @@ func loadPlayback() (*PlaybackState, error) {
 
 // sendMPVCommand sends a JSON IPC command to a running mpv instance.
 func sendMPVCommand(args ...string) {
-
 	socketPath := filepath.Join(os.TempDir(), "workbench-mpv.sock")
 	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
@@ -1186,10 +1185,6 @@ func openItem(item plugin.Item, providerName string) tea.Cmd {
 		}
 		return nil
 	}
-}
-
-type mpvTrackChangedMsg struct {
-	index int
 }
 
 // waitForPlayback finishes waits for the given command to exit and sends a
@@ -1390,8 +1385,7 @@ func (m model) renderHelpOverlay(base string) string {
 		{"/s <term>", "Search current pane"},
 		{"/f <term>", "Filter (hide non-match)"},
 		{"/F <term>", "Filter (dim non-match)"},
-		{"m / M", "Next / prev match"},
-		{"n", "Now Playing (Music)"},
+		{"n / N", "Next / prev match"},
 		{"esc", "Clear search/filter"},
 	}
 	logPane := []struct{ key, desc string }{
@@ -1684,14 +1678,10 @@ func (m model) renderQueueOverlay(base string) string {
 	)
 }
 
-func (m *model) updateNowPlayingIndex(delta int) {
-	m.nowPlayingIndex += delta
-	if m.nowPlayingIndex < 0 {
-		m.nowPlayingIndex = 0
-	} else if m.nowPlayingIndex >= len(m.nowPlayingQueue) {
-		m.nowPlayingIndex = len(m.nowPlayingQueue) - 1
-	}
-}
+// renderPane produces the content string for a single pane.
+// contentHeight is the number of rows available for content (excluding the
+// border); a value of 0 means unconstrained (used during the dims-only pass).
+func (m model) renderPane(idx, contentHeight int) string {
 	p := m.panes[idx]
 	active := idx == m.active
 
