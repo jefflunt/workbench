@@ -77,7 +77,7 @@ func performSearch(query string) ([]plugin.Item, error) {
 	// Use --flat-playlist and remove --no-playlist to allow playlist results.
 	// Add --ignore-errors to skip problematic entries
 	cmd := exec.CommandContext(ctx, "yt-dlp",
-		"ytsearch50:"+query,
+		"ytsearch100:"+query,
 		"--dump-json",
 		"--flat-playlist",
 		"--ignore-errors")

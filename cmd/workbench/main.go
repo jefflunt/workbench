@@ -331,6 +331,9 @@ type model struct {
 	nowPlayingActive   bool
 	nowPlayingProvider string
 	savedPlayback      *PlaybackState
+
+	searchHistory []string
+	searchHistIdx int
 }
 
 // allProviderNames returns the ordered unique list of provider names from the
@@ -380,6 +383,7 @@ func initialModel(cfg Config, providers map[string]plugin.Provider) model {
 		logInput:      logInput,
 		logAutoScroll: true,
 		savedPlayback: saved,
+		searchHistory: loadSearchHistory(),
 	}
 }
 
@@ -707,6 +711,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// If the active pane's search input is focused, route keys to it.
 			if p.searchInput.Focused() {
 				switch msg.String() {
+				case "up":
+					if len(m.searchHistory) > 0 {
+						if m.searchHistIdx > 0 {
+							m.searchHistIdx--
+						}
+						p.searchInput.SetValue(m.searchHistory[m.searchHistIdx])
+						p.searchInput.SetCursor(len(m.searchHistory[m.searchHistIdx]))
+					}
+				case "down":
+					if len(m.searchHistory) > 0 {
+						if m.searchHistIdx < len(m.searchHistory)-1 {
+							m.searchHistIdx++
+							p.searchInput.SetValue(m.searchHistory[m.searchHistIdx])
+							p.searchInput.SetCursor(len(m.searchHistory[m.searchHistIdx]))
+						} else if m.searchHistIdx == len(m.searchHistory)-1 {
+							m.searchHistIdx++
+							p.searchInput.SetValue("")
+						}
+					}
 				case "esc":
 					p.searchMode = ""
 					p.searchQuery = ""
@@ -725,6 +748,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 						// If in /s search mode, also trigger a fresh fetch with the
 						// query to support live results (e.g. from Plex or YTM).
+						addSearchHistory(&m.searchHistory, p.searchQuery)
 						if p.searchMode == "s" {
 							p.stale = true
 							prov := m.providers[p.providerName]
@@ -767,6 +791,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					p.searchMatches = nil
 					p.searchInput.SetValue("")
 					p.searchInput.Placeholder = "reverse search…"
+					m.searchHistIdx = len(m.searchHistory)
 					return m, p.searchInput.Focus()
 				case "f":
 					p.searchMode = "f"
@@ -774,6 +799,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					p.searchMatches = nil
 					p.searchInput.SetValue("")
 					p.searchInput.Placeholder = "filter (hide non-matching)…"
+					m.searchHistIdx = len(m.searchHistory)
 					return m, p.searchInput.Focus()
 				case "F":
 					p.searchMode = "F"
@@ -781,6 +807,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					p.searchMatches = nil
 					p.searchInput.SetValue("")
 					p.searchInput.Placeholder = "filter (dim non-matching)…"
+					m.searchHistIdx = len(m.searchHistory)
 					return m, p.searchInput.Focus()
 				default:
 					// Any other key cancels pending.
@@ -2018,4 +2045,51 @@ func main() {
 		fmt.Fprintf(os.Stderr, "workbench: %v\n", err)
 		os.Exit(1)
 	}
+}
+// loadSearchHistory reads recent searches from ~/.config/workbench/history.json.
+func loadSearchHistory() []string {
+	var history []string
+	cfgDir := os.Getenv("XDG_CONFIG_HOME")
+	if cfgDir == "" {
+		cfgDir = filepath.Join(os.Getenv("HOME"), ".config")
+	}
+	path := filepath.Join(cfgDir, "workbench", "history.json")
+	data, err := os.ReadFile(path)
+	if err == nil {
+		json.Unmarshal(data, &history)
+	}
+	return history
+}
+
+// saveSearchHistory writes recent searches to ~/.config/workbench/history.json.
+func saveSearchHistory(history []string) {
+	cfgDir := os.Getenv("XDG_CONFIG_HOME")
+	if cfgDir == "" {
+		cfgDir = filepath.Join(os.Getenv("HOME"), ".config")
+	}
+	dir := filepath.Join(cfgDir, "workbench")
+	os.MkdirAll(dir, 0755)
+	path := filepath.Join(dir, "history.json")
+	data, _ := json.MarshalIndent(history, "", "  ")
+	os.WriteFile(path, data, 0644)
+}
+
+// addSearchHistory adds a query to the history, limiting to 20 entries.
+func addSearchHistory(history *[]string, query string) {
+	if query == "" {
+		return
+	}
+	// Remove if already exists (bring to front).
+	filtered := make([]string, 0, len(*history))
+	for _, h := range *history {
+		if h != query {
+			filtered = append(filtered, h)
+		}
+	}
+	filtered = append(filtered, query)
+	if len(filtered) > 20 {
+		filtered = filtered[len(filtered)-20:]
+	}
+	*history = filtered
+	saveSearchHistory(filtered)
 }

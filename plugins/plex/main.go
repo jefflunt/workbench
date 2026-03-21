@@ -193,7 +193,7 @@ func performSearch(serverURL, token, query, sectionID string) ([]plugin.Item, er
 	}
 	q := u.Query()
 	q.Set("query", query)
-	q.Set("limit", "50")
+	q.Set("limit", "100")
 	// 8=Artist, 9=Album, 10=Track, 15=Playlist
 	q.Set("type", "8,9,10,15")
 	q.Set("X-Plex-Token", token)
