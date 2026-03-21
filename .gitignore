@@ -1,0 +1,42 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.so.*
+*.dylib
+*.o
+*.a
+*.test
+*.out
+
+# Go-specific
+/bin/
+/dist/
+*.mod
+*.sum
+
+# Logs
+*.log
+logs/
+*.gz
+
+# Temporary and ephemeral data
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+.DS_Store
+Thumbs.db
+.env
+.env.local
+.vscode/
+.idea/
+*.iml
+
+# Build outputs
+build/
+target/
+.gradle/
+node_modules/
