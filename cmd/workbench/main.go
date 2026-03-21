@@ -654,21 +654,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.queueCursor < len(m.nowPlayingQueue)-1 {
 					m.queueCursor++
 				}
-				// Keep cursor in view.
-				innerH := (m.termH * 60 / 100) - 4
-				if innerH < 1 {
-					innerH = 1
-				}
-				if m.queueCursor >= m.queueScroll+innerH {
-					m.queueScroll = m.queueCursor - innerH + 1
-				}
 			case "k", "up":
 				if m.queueCursor > 0 {
 					m.queueCursor--
-				}
-				// Keep cursor in view.
-				if m.queueCursor < m.queueScroll {
-					m.queueScroll = m.queueCursor
 				}
 			case " ":
 				if m.activePlayer != nil {
@@ -839,15 +827,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.active = (m.active - 1 + len(m.panes)) % len(m.panes)
 
 			case "j", "down":
-				items := m.visibleItems(m.active)
-				if p.cursor < len(items)-1 {
-					p.cursor++
-				}
+				m.handleNav(1)
 
 			case "k", "up":
-				if p.cursor > 0 {
-					p.cursor--
-				}
+				m.handleNav(-1)
+
+			case "J":
+				m.handleNav(10)
+
+			case "K":
+				m.handleNav(-10)
 
 			case " ":
 				if m.activePlayer != nil {
@@ -896,15 +885,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "n":
 				if p.providerName == "music-streamer" || p.providerName == "plex" || p.providerName == "ytmusic" {
 					m.mode = modeNowPlaying
-					m.queueCursor = m.nowPlayingIndex
 				}
-
-			case "J":
-				items := m.visibleItems(m.active)
-				p.cursor = min(p.cursor+10, len(items)-1)
-
-			case "K":
-				p.cursor = max(p.cursor-10, 0)
 
 			case "R":
 				// Keep existing items visible (stale) while refreshing.
@@ -993,6 +974,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m *model) handleNav(delta int) {
+	p := &m.panes[m.active]
+	items := m.visibleItems(m.active)
+	if delta > 0 {
+		p.cursor = min(p.cursor+delta, len(items)-1)
+	} else {
+		p.cursor = max(p.cursor+delta, 0)
+	}
 }
 
 func (m *model) updateNowPlayingIndex(delta int) {
