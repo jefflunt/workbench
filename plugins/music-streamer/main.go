@@ -55,6 +55,24 @@ func fetch(cfg map[string]any, query string) ([]plugin.Item, error) {
 		return nil, fmt.Errorf("music-streamer: backends list required in [plugins.music-streamer]")
 	}
 
+	if query == "" {
+		var items []plugin.Item
+		for _, bd := range backendsData {
+			bMap, ok := bd.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := bMap["name"].(string)
+			path, _ := bMap["path"].(string)
+			items = append(items, plugin.Item{
+				Title:    name,
+				Subtitle: path,
+				Meta:     "Backend",
+			})
+		}
+		return items, nil
+	}
+
 	fmt.Fprintf(os.Stderr, "music-streamer: received query %q, found %d backends\n", query, len(backendsData))
 
 	var wg sync.WaitGroup

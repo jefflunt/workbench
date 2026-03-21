@@ -2,6 +2,7 @@
 package main
 
 import (
+	"github.com/mattn/go-runewidth"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -52,7 +53,7 @@ type LayoutConfig struct {
 // ThemeConfig holds visual styling settings.
 type ThemeConfig struct {
 	// ActivePaneColor is a terminal color code (ANSI 256 or hex) used for the
-	// focused pane's border.  Defaults to "212" (pink/magenta).
+	// focused pane's border.  Defaults to "#00008B" (pink/magenta).
 	ActivePaneColor string `toml:"active_pane_color"`
 }
 
@@ -88,7 +89,7 @@ func defaultConfig() Config {
 	return Config{
 		Plugins: map[string]map[string]any{},
 		Theme: ThemeConfig{
-			ActivePaneColor: "212",
+			ActivePaneColor: "#00008B",
 		},
 		Log: LogConfig{
 			MaxLines: 1_000_000,
@@ -137,7 +138,7 @@ func loadConfig() (Config, error) {
 	}
 	// Ensure theme defaults are applied when the config omits them.
 	if cfg.Theme.ActivePaneColor == "" {
-		cfg.Theme.ActivePaneColor = "212"
+		cfg.Theme.ActivePaneColor = "#00008B"
 	}
 	return cfg, nil
 }
@@ -237,7 +238,7 @@ const (
 var (
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("212"))
+			Foreground(lipgloss.Color("#00008B"))
 
 	selectedStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -270,12 +271,12 @@ var (
 
 	overlayBorderStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("212")).
+				BorderForeground(lipgloss.Color("#00008B")).
 				Padding(1, 3)
 
 	overlayTitleStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("212"))
+				Foreground(lipgloss.Color("#00008B"))
 
 	overlayKeyStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -285,7 +286,7 @@ var (
 				Foreground(lipgloss.Color("252"))
 
 	searchBarStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("212")).
+			Foreground(lipgloss.Color("#00008B")).
 			Bold(true)
 
 	searchNoMatchStyle = lipgloss.NewStyle().
@@ -1395,7 +1396,11 @@ func (m model) View() string {
 		if d, ok := dims[p.providerName]; ok {
 			h = d.ContentHeight
 		}
-		views[p.providerName] = m.renderPane(i, h)
+		w := 0
+		if d, ok := dims[p.providerName]; ok {
+			w = d.Width
+		}
+		views[p.providerName] = m.renderPane(i, h, w)
 
 		// Construct border title
 		title := strings.ToUpper(p.providerName)
@@ -1729,7 +1734,7 @@ func (m model) renderLogOverlay(base string) string {
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("212")).
+		BorderForeground(lipgloss.Color("#00008B")).
 		Width(innerW).
 		Height(boxH - 2).
 		Render(sb.String())
@@ -1786,7 +1791,7 @@ func (m model) renderQueueOverlay(base string) string {
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("212")).
+		BorderForeground(lipgloss.Color("#00008B")).
 		Width(boxW).
 		Height(boxH).
 		Render(sb.String())
@@ -1803,7 +1808,7 @@ func (m model) renderQueueOverlay(base string) string {
 // renderPane produces the content string for a single pane.
 // contentHeight is the number of rows available for content (excluding the
 // border); a value of 0 means unconstrained (used during the dims-only pass).
-func (m model) renderPane(idx, contentHeight int) string {
+func (m model) renderPane(idx, contentHeight, paneWidth int) string {
 	p := m.panes[idx]
 	active := idx == m.active
 
@@ -1909,10 +1914,48 @@ func (m model) renderPane(idx, contentHeight int) string {
 			cursorStr = "▶ "
 		}
 
-		title := truncate(item.Title, 40)
-		subtitle := subtitleStyle.Render(truncate(item.Subtitle, 20))
-		meta := metaStyle.Render(truncate(item.Meta, 15))
-		line := fmt.Sprintf("%-40s %-20s %s", title, subtitle, meta)
+		availW := paneWidth - 6 // 2 border chars, 2 padding chars, 2 cursor chars
+		if availW < 10 {
+			availW = 10
+		}
+
+		metaStr := truncate(item.Meta, 15)
+		metaW := runewidth.StringWidth(metaStr)
+		if metaW > 0 {
+			metaW += 1 // space before meta
+		}
+
+		subStr := truncate(item.Subtitle, 20)
+		subW := runewidth.StringWidth(subStr)
+		if subW > 0 {
+			subW += 1 // space before subtitle
+		}
+
+		titleW := availW - subW - metaW
+		if titleW < 5 {
+			titleW = 5
+		}
+
+		title := truncate(item.Title, titleW)
+		subtitle := subtitleStyle.Render(subStr)
+		meta := metaStyle.Render(metaStr)
+
+		// Fill remaining space with spaces to push meta to the right
+		paddingLen := availW - runewidth.StringWidth(title) - subW - metaW
+		if paddingLen < 0 {
+			paddingLen = 0
+		}
+
+		var line string
+		if subStr != "" && metaStr != "" {
+			line = fmt.Sprintf("%s%s %s %s", title, strings.Repeat(" ", paddingLen), subtitle, meta)
+		} else if subStr != "" {
+			line = fmt.Sprintf("%s%s %s", title, strings.Repeat(" ", paddingLen), subtitle)
+		} else if metaStr != "" {
+			line = fmt.Sprintf("%s%s %s", title, strings.Repeat(" ", paddingLen), meta)
+		} else {
+			line = title
+		}
 
 		isMatch := origIdx >= 0 && matchSet[origIdx]
 		isCurrentMatch := p.searchMode == "s" && len(p.searchMatches) > 0 &&
@@ -1952,15 +1995,12 @@ func (m model) renderPane(idx, contentHeight int) string {
 }
 
 // truncate shortens s to at most n runes, appending "…" if it was shortened.
+// truncate shortens s to at most n visible cells, appending "…" if shortened.
 func truncate(s string, n int) string {
-	runes := []rune(s)
-	if len(runes) <= n {
+	if runewidth.StringWidth(s) <= n {
 		return s
 	}
-	if n <= 1 {
-		return "…"
-	}
-	return string(runes[:n-1]) + "…"
+	return runewidth.Truncate(s, n, "…")
 }
 
 // ---------------------------------------------------------------------------
