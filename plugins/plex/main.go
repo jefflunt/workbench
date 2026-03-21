@@ -175,8 +175,7 @@ func performSearch(serverURL, token, query, sectionID string) ([]plugin.Item, er
 		case "artist":
 			item.Subtitle = "Artist"
 			item.Meta = "Plex"
-			// URL could point to artist's tracks if we had an endpoint
-			// For now, no direct playback for just an artist
+			item.URL = fmt.Sprintf("music://plex-playlist/%s/library/metadata/%s/allLeaves?X-Plex-Token=%s", url.PathEscape(serverURL), m.RatingKey, token)
 		case "album":
 			item.Subtitle = m.ParentTitle // Artist name for albums
 			item.Meta = "Album"

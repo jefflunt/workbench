@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -302,7 +303,8 @@ type model struct {
 
 	// Playback state
 	activePlayer       *exec.Cmd
-	nowPlaying         *plugin.Item
+	nowPlaying         plugin.Item
+	nowPlayingActive   bool
 	nowPlayingProvider string
 }
 
@@ -502,7 +504,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.logInput.Blur()
 					return m, nil
 				case "enter":
-					m.logQuery = m.logInput.Value()
+					m.logQuery = strings.TrimSpace(m.logInput.Value())
 					m.logInput.Blur()
 					if m.logSearchMode == "s" || m.logSearchMode == "f" || m.logSearchMode == "F" {
 						m.logMatches = wblog.Global().Search(m.logLines, m.logQuery)
@@ -630,7 +632,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					p.searchInput.SetValue("")
 					p.searchInput.Blur()
 				case "enter":
-					p.searchQuery = p.searchInput.Value()
+					p.searchQuery = strings.TrimSpace(p.searchInput.Value())
 					p.searchInput.Blur()
 					if p.searchMode == "s" || p.searchMode == "f" || p.searchMode == "F" {
 						p.searchMatches = paneMatches(p.items, p.searchQuery)
@@ -716,7 +718,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if strings.HasPrefix(item.URL, "music://") && m.activePlayer != nil {
 						_ = m.activePlayer.Process.Kill()
 						m.activePlayer = nil
-						m.nowPlaying = nil
+						m.nowPlayingActive = false
 					}
 					if cmd := openItem(item, p.providerName); cmd != nil {
 						return m, cmd
@@ -764,6 +766,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					p.cursor--
 				}
 
+			case "h":
+				if m.activePlayer != nil {
+					sendMPVCommand("playlist-prev")
+				}
+
+			case "l":
+				if m.activePlayer != nil {
+					sendMPVCommand("playlist-next")
+				}
+
 			case "J":
 				items := m.visibleItems(m.active)
 				p.cursor = min(p.cursor+10, len(items)-1)
@@ -793,14 +805,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case playbackStartedMsg:
 		m.activePlayer = msg.cmd
-		m.nowPlaying = &msg.item
+		m.nowPlaying = msg.item
+		m.nowPlayingActive = true
 		m.nowPlayingProvider = msg.providerName
 		return m, waitForPlayback(msg.cmd)
 
 	case playbackFinishedMsg:
 		if m.activePlayer == msg.cmd {
 			m.activePlayer = nil
-			m.nowPlaying = nil
+			m.nowPlayingActive = false
 			m.nowPlayingProvider = ""
 		}
 		return m, nil
@@ -857,6 +870,23 @@ func runLoginCmd(name string, args ...string) tea.Cmd {
 	})
 }
 
+// sendMPVCommand sends a JSON IPC command to a running mpv instance.
+func sendMPVCommand(args ...string) {
+	socketPath := filepath.Join(os.TempDir(), "workbench-mpv.sock")
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		// This is common if mpv just started or just exited.
+		return
+	}
+	defer conn.Close()
+
+	type cmd struct {
+		Command []string `json:"command"`
+	}
+	req, _ := json.Marshal(cmd{Command: args})
+	_, _ = conn.Write(append(req, '\n'))
+}
+
 // openItem opens the given item's URL via the macOS `open` command.
 // All URL schemes are handled: message:// opens Mail.app, https:// opens the
 // default browser, etc.
@@ -868,33 +898,33 @@ func openItem(item plugin.Item, providerName string) tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
+		wblog.Info("main", fmt.Sprintf("openItem: url=%s provider=%s", item.URL, providerName))
 		if strings.HasPrefix(item.URL, "music://") {
 			// Handle custom music:// scheme.
 			targets := []string{}
 
 			if strings.HasPrefix(item.URL, "music://ytm/") {
-				// music://ytm/ID -> YouTube Music URL
-				targets = append(targets, "https://music.youtube.com/watch?v="+strings.TrimPrefix(item.URL, "music://ytm/"))
+				id := strings.TrimPrefix(item.URL, "music://ytm/")
+				targets = append(targets, "https://music.youtube.com/watch?v="+id)
 			} else if strings.HasPrefix(item.URL, "music://ytm-playlist/") {
-				// music://ytm-playlist/URL -> Direct URL
 				targets = append(targets, strings.TrimPrefix(item.URL, "music://ytm-playlist/"))
 			} else if strings.HasPrefix(item.URL, "music://plex/") {
-				// music://plex/URL -> Raw Plex Stream URL
 				targets = append(targets, strings.TrimPrefix(item.URL, "music://plex/"))
 			} else if strings.HasPrefix(item.URL, "music://plex-playlist/") {
-				// music://plex-playlist/ENCODED_SERVER_URL/REL_PATH -> Expand tracks
 				parts := strings.SplitN(strings.TrimPrefix(item.URL, "music://plex-playlist/"), "/", 2)
 				if len(parts) == 2 {
 					serverURL, _ := url.QueryUnescape(parts[0])
 					relPath := parts[1]
 					fullURL := serverURL + "/" + relPath
 
-					// Fetch playlist items
+					wblog.Info("main", fmt.Sprintf("expanding plex playlist: %s", fullURL))
 					client := &http.Client{Timeout: 10 * time.Second}
 					req, _ := http.NewRequest("GET", fullURL, nil)
 					req.Header.Set("Accept", "application/json")
 					resp, err := client.Do(req)
-					if err == nil {
+					if err != nil {
+						wblog.Error("main", fmt.Sprintf("plex expansion failed: %v", err))
+					} else {
 						defer resp.Body.Close()
 						var pr struct {
 							MediaContainer struct {
@@ -907,8 +937,9 @@ func openItem(item plugin.Item, providerName string) tea.Cmd {
 								} `json:"metadata"`
 							} `json:"MediaContainer"`
 						}
-						if err := json.NewDecoder(resp.Body).Decode(&pr); err == nil {
-							// Extract X-Plex-Token from fullURL
+						if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+							wblog.Error("main", fmt.Sprintf("plex decode failed: %v", err))
+						} else {
 							u, _ := url.Parse(fullURL)
 							token := u.Query().Get("X-Plex-Token")
 
@@ -918,23 +949,27 @@ func openItem(item plugin.Item, providerName string) tea.Cmd {
 									targets = append(targets, trackURL)
 								}
 							}
+							wblog.Info("main", fmt.Sprintf("expanded plex playlist to %d tracks", len(targets)))
 						}
 					}
 				}
 			}
 
 			if len(targets) == 0 {
+				wblog.Warn("main", "no playback targets found for music URL")
 				return nil
 			}
 
 			// Run mpv in the background for audio playback.
-			args := append([]string{"--no-video"}, targets...)
+			socketPath := filepath.Join(os.TempDir(), "workbench-mpv.sock")
+			args := []string{"--no-video", "--input-ipc-server=" + socketPath}
+			args = append(args, targets...)
+			wblog.Info("main", fmt.Sprintf("spawning mpv with %d targets", len(targets)))
 			cmd := exec.Command("mpv", args...)
 			if err := cmd.Start(); err != nil {
-				wblog.Error("main", fmt.Sprintf("mpv failed: %v", err))
+				wblog.Error("main", fmt.Sprintf("mpv start failed: %v", err))
 				return nil
 			}
-			wblog.Info("main", fmt.Sprintf("playing %d item(s) via mpv", len(targets)))
 			return playbackStartedMsg{
 				cmd:          cmd,
 				item:         item,
@@ -1109,6 +1144,7 @@ func (m model) renderHelpOverlay(base string) string {
 		{"J", "Move cursor down 10"},
 		{"K", "Move cursor up 10"},
 		{"Enter", "Open selected item"},
+		{"h / l", "Prev / next track"},
 		{"R", "Refresh all panes"},
 		{"L then g", "Login: GitHub"},
 		{"L then a", "Login: Jira"},
@@ -1405,7 +1441,7 @@ func (m model) renderPane(idx, contentHeight int) string {
 	}
 	sb.WriteString("\n")
 
-	if m.nowPlaying != nil && m.nowPlayingProvider == p.providerName {
+	if m.nowPlayingActive && m.nowPlayingProvider == p.providerName {
 		title := truncate(m.nowPlaying.Title, 50)
 		sb.WriteString(lipgloss.NewStyle().
 			Foreground(lipgloss.Color("212")).
