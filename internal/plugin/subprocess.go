@@ -44,14 +44,18 @@ func (p *SubprocessProvider) Name() string { return p.name }
 // argument, writes a FetchRequest JSON to stdin, and reads a FetchResponse
 // JSON from stdout.  Stderr is captured and returned as part of any error
 // message.
-func (p *SubprocessProvider) Fetch(ctx context.Context) ([]Item, error) {
-	req := FetchRequest{Config: p.config}
+func (p *SubprocessProvider) Fetch(ctx context.Context, query string) ([]Item, error) {
+	req := FetchRequest{
+		Config: p.config,
+		Query:  query,
+	}
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("plugin %s: encode request: %w", p.name, err)
 	}
 
 	cmd := exec.CommandContext(ctx, p.binaryPath, "fetch") //nolint:gosec
+
 	cmd.Stdin = bytes.NewReader(reqBytes)
 
 	var stdout, stderr bytes.Buffer

@@ -29,6 +29,26 @@ watching_jql = "watcher = currentUser() AND status in ('In Review', 'Blocked')"
 limit = 50
 
 # ---------------------------------------------------------------------------
+# Music Plugins
+# ---------------------------------------------------------------------------
+
+[plugins.plex]
+# Plex server URL and Token (from Plex settings or browser URL)
+server_url = "http://192.168.1.100:32400"
+token      = "abcdef123456"
+
+[plugins.ytmusic]
+# Uses `yt-dlp` for searching and streaming. No config needed if yt-dlp is in PATH.
+
+[plugins.music-streamer]
+# The aggregator plugin that merges results from multiple backends.
+# Each backend needs its name, the path to its plugin binary, and its specific config.
+backends = [
+  { name = "plex",    path = "/Users/jefflunt/.config/workbench/plugins/plex", config = { server_url = "http://192.168.1.100:32400", token = "abcdef123456" } },
+  { name = "ytmusic", path = "/Users/jefflunt/.config/workbench/plugins/ytmusic", config = {} }
+]
+
+# ---------------------------------------------------------------------------
 # Theme
 # ---------------------------------------------------------------------------
 

@@ -45,6 +45,10 @@ type FetchRequest struct {
 	// Config is the plugin's configuration map from [plugins.<name>] in
 	// config.toml.  Keys and value types are defined entirely by each plugin.
 	Config map[string]any `json:"config"`
+
+	// Query is an optional search term. When provided, the plugin should return
+	// live search results instead of its default item list.
+	Query string `json:"query,omitempty"`
 }
 
 // FetchResponse is what a plugin must write to stdout before exiting.
@@ -61,5 +65,5 @@ type FetchResponse struct {
 // provider.Item so that main.go does not need to import both packages.
 type Provider interface {
 	Name() string
-	Fetch(ctx context.Context) ([]Item, error)
+	Fetch(ctx context.Context, query string) ([]Item, error)
 }

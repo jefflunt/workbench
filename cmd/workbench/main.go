@@ -372,7 +372,7 @@ func fetchAll(providers map[string]plugin.Provider) tea.Cmd {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
 				wblog.ChildInfo("main", span, fmt.Sprintf("fetch start provider=%s", p.Name()))
-				items, err := p.Fetch(ctx)
+				items, err := p.Fetch(ctx, "")
 				if err != nil {
 					wblog.ChildError("main", span, fmt.Sprintf("fetch error provider=%s err=%v", p.Name(), err))
 				} else {
@@ -397,6 +397,27 @@ func fetchAll(providers map[string]plugin.Provider) tea.Cmd {
 		}
 		wblog.ChildInfo("main", span, "refresh complete")
 		return msgs
+	}
+}
+
+// fetchOne kicks off a Fetch call for a single provider, optionally with a
+// query. Returns a slice of length 1 containing the result.
+func fetchOne(p plugin.Provider, query string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		wblog.Info("main", fmt.Sprintf("fetch start provider=%s query=%q", p.Name(), query))
+		items, err := p.Fetch(ctx, query)
+		if err != nil {
+			wblog.Error("main", fmt.Sprintf("fetch error provider=%s err=%v", p.Name(), err))
+		} else {
+			wblog.Info("main", fmt.Sprintf("fetch done provider=%s items=%d", p.Name(), len(items)))
+		}
+		return []fetchResultMsg{{
+			providerName: p.Name(),
+			items:        items,
+			err:          err,
+		}}
 	}
 }
 
@@ -590,6 +611,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						p.searchCursor = 0
 						if p.searchMode == "s" && len(p.searchMatches) > 0 {
 							p.cursor = p.searchMatches[0]
+						}
+						// If in /s search mode, also trigger a fresh fetch with the
+						// query to support live results (e.g. from Plex or YTM).
+						if p.searchMode == "s" {
+							p.stale = true
+							prov := m.providers[p.providerName]
+							return m, tea.Batch(p.spinner.Tick, fetchOne(prov, p.searchQuery))
 						}
 					}
 				default:
@@ -791,6 +819,28 @@ func openItem(item plugin.Item) tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
+		if strings.HasPrefix(item.URL, "music://") {
+			// Handle custom music:// scheme.
+			target := item.URL
+			if strings.HasPrefix(item.URL, "music://ytm/") {
+				// music://ytm/ID -> YouTube Music URL
+				target = "https://music.youtube.com/watch?v=" + strings.TrimPrefix(item.URL, "music://ytm/")
+			} else if strings.HasPrefix(item.URL, "music://plex/") {
+				// music://plex/URL -> Raw Plex Stream URL
+				target = strings.TrimPrefix(item.URL, "music://plex/")
+			}
+
+			// Run mpv in the background for audio playback.
+			cmd := exec.Command("mpv", "--no-video", target)
+			if err := cmd.Start(); err != nil {
+				wblog.Error("main", fmt.Sprintf("mpv failed: %v", err))
+			} else {
+				wblog.Info("main", fmt.Sprintf("playing music via mpv: %s", target))
+				go func() { _ = cmd.Wait() }()
+			}
+			return nil
+		}
+
 		cmd := exec.Command("open", item.URL) //nolint:gosec
 		if err := cmd.Run(); err != nil {
 			wblog.Warn("main", fmt.Sprintf("open url=%s err=%v", item.URL, err))

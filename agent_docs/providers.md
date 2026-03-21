@@ -14,13 +14,14 @@ type Item struct {
 
 type Provider interface {
     Name() string
-    Fetch(ctx context.Context) ([]Item, error)
+    Fetch(ctx context.Context, query string) ([]Item, error)
 }
 ```
 
 **Rules for implementors:**
 - `Name()` must exactly match the string used in `config.toml` pane `provider` fields. It is also the cache filename key and the `paneIndex` map key.
 - `Fetch` is called concurrently with all other providers, with a 30-second context deadline. Respect cancellation.
+- `query` is an optional search term. If non-empty, the provider should return live search results instead of its default item list.
 - Return `nil, error` on total failure — do not mix partial results with a non-nil error (the caller takes the whole slice or nothing).
 - `Highlighted: true` means the item gets red rendering and sorts visually "urgent". Use it for unread email, review-requested PRs, high-priority notifications.
 
