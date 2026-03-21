@@ -21,6 +21,15 @@ type Backend struct {
 
 **Auth:** Delegated to each backend plugin.
 
+### Media Stream Execution & Plugins
+
+The `music-streamer` plugin (and its sub-plugins like `plex` or `ytmusic`) are responsible purely for fetching/searching metadata. When a user presses `Enter` on a music item, it expects the `URL` to use a registered `music://<scheme>/<id>` (or `music-shuffle://`) URL scheme.
+
+The translation of these custom URLs into actual streaming targets is handled by `internal/media/media.go` inside the core `workbench` app. This enforces a strict security boundary where `workbench` controls the media queue and exact streaming parameters, rather than blindly executing plugin-provided scripts.
+
+**Adding a New Streaming Provider:**
+1. Write a standard plugin that returns `plugin.Item`s where the `URL` is `music://your-scheme/...`.
+2. Submit a Pull Request to `workbench` modifying `internal/media/media.go` to add `registry["your-scheme"] = handleYourScheme`.
 
 ## Apple Mail Provider (`internal/applemail`)
 

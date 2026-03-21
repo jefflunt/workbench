@@ -2,14 +2,10 @@
 package main
 
 import (
-	"github.com/mattn/go-runewidth"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,10 +18,13 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/jluntpcty/workbench/internal/cache"
 	"github.com/jluntpcty/workbench/internal/layout"
 	wblog "github.com/jluntpcty/workbench/internal/log"
+	"github.com/jluntpcty/workbench/internal/media"
+	"github.com/jluntpcty/workbench/internal/player"
 	"github.com/jluntpcty/workbench/internal/plugin"
 )
 
@@ -157,6 +156,7 @@ type fetchResultMsg struct {
 // playbackStartedMsg is sent when a new music player process has started.
 type playbackStartedMsg struct {
 	cmd          *exec.Cmd
+	player       player.Player
 	queue        []plugin.Item
 	providerName string
 }
@@ -171,8 +171,8 @@ type expandResultMsg struct {
 	err          error
 }
 
-// mpvTrackChangedMsg is sent when the mpv playlist index changes.
-type mpvTrackChangedMsg struct {
+// playerTrackChangedMsg is sent when the player playlist index changes.
+type playerTrackChangedMsg struct {
 	index int
 }
 
@@ -324,7 +324,8 @@ type model struct {
 	logMatchCursor int    // index into logMatches for n/N navigation
 
 	// Playback state
-	activePlayer       *exec.Cmd
+	activePlayer       player.Player
+	activeCmd          *exec.Cmd
 	nowPlayingQueue    []plugin.Item
 	nowPlayingIndex    int
 	queueCursor        int
@@ -484,14 +485,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Global keys
 		if msg.String() == "ctrl+c" {
 			if m.activePlayer != nil {
-				ts, _ := queryMPV("playback-time")
+				ts, _ := m.activePlayer.CurrentTimestamp()
 				_ = savePlayback(PlaybackState{
 					Queue:        m.nowPlayingQueue,
 					Index:        m.nowPlayingIndex,
 					ProviderName: m.nowPlayingProvider,
 					Timestamp:    ts,
 				})
-				_ = m.activePlayer.Process.Kill()
+				_ = m.activeCmd.Process.Kill()
 			}
 			return m, tea.Quit
 		}
@@ -684,23 +685,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case " ":
 				if m.activePlayer != nil {
-					sendMPVCommand("cycle", "pause")
+					_ = m.activePlayer.Pause()
 				}
 			case "h":
 				if m.activePlayer != nil {
-					sendMPVCommand("playlist-prev")
+					_ = m.activePlayer.Prev()
 					m.updateNowPlayingIndex(-1)
 					m.queueCursor = m.nowPlayingIndex
 				}
 			case "l":
 				if m.activePlayer != nil {
-					sendMPVCommand("playlist-next")
+					_ = m.activePlayer.Next()
 					m.updateNowPlayingIndex(1)
 					m.queueCursor = m.nowPlayingIndex
 				}
 			case "enter":
 				if m.activePlayer != nil {
-					sendMPVCommand("playlist-play-index", fmt.Sprintf("%d", m.queueCursor+1))
+					_ = m.activePlayer.PlayIndex(m.queueCursor + 1)
 					m.nowPlayingIndex = m.queueCursor
 				}
 			}
@@ -820,14 +821,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "q", "ctrl+c":
 				if m.activePlayer != nil {
-					ts, _ := queryMPV("playback-time")
+					ts, _ := m.activePlayer.CurrentTimestamp()
 					_ = savePlayback(PlaybackState{
 						Queue:        m.nowPlayingQueue,
 						Index:        m.nowPlayingIndex,
 						ProviderName: m.nowPlayingProvider,
 						Timestamp:    ts,
 					})
-					_ = m.activePlayer.Process.Kill()
+					_ = m.activeCmd.Process.Kill()
 				}
 				return m, tea.Quit
 
@@ -853,8 +854,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if p.cursor >= 0 && p.cursor < len(items) {
 					item := items[p.cursor]
 					if strings.HasPrefix(item.URL, "music://") && m.activePlayer != nil {
-						_ = m.activePlayer.Process.Kill()
+						_ = m.activeCmd.Process.Kill()
 						m.activePlayer = nil
+						m.activeCmd = nil
 						m.nowPlayingActive = false
 					}
 					if cmd := openItem(item, p.providerName); cmd != nil {
@@ -906,7 +908,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			case " ":
 				if m.activePlayer != nil {
-					sendMPVCommand("cycle", "pause")
+					_ = m.activePlayer.Pause()
 				} else if m.savedPlayback != nil {
 					wblog.Info("main", "resuming playback from saved state")
 					state := m.savedPlayback
@@ -928,8 +930,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if strings.HasPrefix(item.URL, "music://") {
 						item.URL = strings.Replace(item.URL, "music://", "music-shuffle://", 1)
 						if m.activePlayer != nil {
-							_ = m.activePlayer.Process.Kill()
+							_ = m.activeCmd.Process.Kill()
 							m.activePlayer = nil
+							m.activeCmd = nil
 							m.nowPlayingActive = false
 						}
 						if cmd := openItem(item, p.providerName); cmd != nil {
@@ -958,12 +961,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			case "h":
 				if m.activePlayer != nil {
-					sendMPVCommand("playlist-prev")
+					_ = m.activePlayer.Prev()
 				}
 
 			case "l":
 				if m.activePlayer != nil {
-					sendMPVCommand("playlist-next")
+					_ = m.activePlayer.Next()
 				}
 
 			case "n":
@@ -992,16 +995,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case playbackStartedMsg:
-		m.activePlayer = msg.cmd
+		m.activePlayer = msg.player
+		m.activeCmd = msg.cmd
 		m.nowPlayingQueue = msg.queue
 		m.nowPlayingIndex = 0
 		m.nowPlayingActive = true
 		m.nowPlayingProvider = msg.providerName
-		return m, tea.Batch(waitForPlayback(msg.cmd), watchMPV())
+		return m, tea.Batch(waitForPlayback(msg.cmd), watchPlayer(msg.player))
 
 	case playbackFinishedMsg:
-		if m.activePlayer == msg.cmd {
+		if m.activeCmd == msg.cmd {
 			m.activePlayer = nil
+			m.activeCmd = nil
 			m.nowPlayingQueue = nil
 			m.nowPlayingActive = false
 			m.nowPlayingProvider = ""
@@ -1009,9 +1014,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case mpvTrackChangedMsg:
+	case playerTrackChangedMsg:
 		m.nowPlayingIndex = msg.index
-		return m, watchMPV()
+		return m, watchPlayer(m.activePlayer)
 
 	case expandResultMsg:
 		if idx, ok := m.paneIndex[msg.providerName]; ok {
@@ -1101,32 +1106,6 @@ func runLoginCmd(name string, args ...string) tea.Cmd {
 	})
 }
 
-// queryMPV asks a running mpv instance for property info.
-func queryMPV(property string) (float64, error) {
-	socketPath := filepath.Join(os.TempDir(), "workbench-mpv.sock")
-	conn, err := net.Dial("unix", socketPath)
-	if err != nil {
-		return 0, err
-	}
-	defer conn.Close()
-
-	type cmd struct {
-		Command []string `json:"command"`
-	}
-	req, _ := json.Marshal(cmd{Command: []string{"get_property", property}})
-	_, err = conn.Write(append(req, '\n'))
-	if err != nil {
-		return 0, err
-	}
-
-	var resp struct {
-		Data float64 `json:"data"`
-	}
-	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
-		return 0, err
-	}
-	return resp.Data, nil
-}
 
 func savePlayback(state PlaybackState) error {
 	dir, err := os.UserCacheDir()
@@ -1160,29 +1139,7 @@ func loadPlayback() (*PlaybackState, error) {
 	return &state, nil
 }
 
-// sendMPVCommand sends a JSON IPC command to a running mpv instance.
-func sendMPVCommand(args ...string) {
-	socketPath := filepath.Join(os.TempDir(), "workbench-mpv.sock")
-	conn, err := net.Dial("unix", socketPath)
-	if err != nil {
-		// This is common if mpv just started or just exited.
-		return
-	}
-	defer conn.Close()
 
-	type cmd struct {
-		Command []string `json:"command"`
-	}
-	req, _ := json.Marshal(cmd{Command: args})
-	_, _ = conn.Write(append(req, '\n'))
-}
-
-// openItem opens the given item's URL via the macOS `open` command.
-// All URL schemes are handled: message:// opens Mail.app, https:// opens the
-// default browser, etc.
-//
-// The command runs in the background — errors are logged but not surfaced in
-// the TUI, since opening an item is best-effort.
 func openItem(item plugin.Item, providerName string) tea.Cmd {
 	if item.URL == "" {
 		return nil
@@ -1190,98 +1147,29 @@ func openItem(item plugin.Item, providerName string) tea.Cmd {
 	return func() tea.Msg {
 		wblog.Info("main", fmt.Sprintf("openItem: url=%s provider=%s", item.URL, providerName))
 		if strings.HasPrefix(item.URL, "music://") || strings.HasPrefix(item.URL, "music-shuffle://") {
-			// Handle custom music:// or music-shuffle:// scheme.
 			isShuffle := strings.HasPrefix(item.URL, "music-shuffle://")
-			urlBase := "music://"
-			if isShuffle {
-				urlBase = "music-shuffle://"
+			queue, targets, err := media.Resolve(item.URL, item)
+			if err != nil {
+				wblog.Error("main", fmt.Sprintf("media resolution failed: %v", err))
+				return nil
 			}
-
-			queue := []plugin.Item{}
-			targets := []string{}
-
-			if strings.HasPrefix(item.URL, urlBase+"ytm/") {
-				id := strings.TrimPrefix(item.URL, urlBase+"ytm/")
-				queue = append(queue, item)
-				targets = append(targets, "https://music.youtube.com/watch?v="+id)
-			} else if strings.HasPrefix(item.URL, urlBase+"ytm-playlist/") {
-				queue = append(queue, item) // Placeholder for playlist
-				targets = append(targets, strings.TrimPrefix(item.URL, urlBase+"ytm-playlist/"))
-			} else if strings.HasPrefix(item.URL, urlBase+"plex/") {
-				queue = append(queue, item)
-				targets = append(targets, strings.TrimPrefix(item.URL, urlBase+"plex/"))
-			} else if strings.HasPrefix(item.URL, urlBase+"plex-playlist/") {
-				parts := strings.SplitN(strings.TrimPrefix(item.URL, urlBase+"plex-playlist/"), "/", 2)
-				if len(parts) == 2 {
-					serverURL, _ := url.QueryUnescape(parts[0])
-					relPath := parts[1]
-					fullURL := serverURL + "/" + relPath
-
-					wblog.Info("main", fmt.Sprintf("expanding plex playlist: %s", fullURL))
-					client := &http.Client{Timeout: 10 * time.Second}
-					req, _ := http.NewRequest("GET", fullURL, nil)
-					req.Header.Set("Accept", "application/json")
-					resp, err := client.Do(req)
-					if err != nil {
-						wblog.Error("main", fmt.Sprintf("plex expansion failed: %v", err))
-					} else {
-						defer resp.Body.Close()
-						var pr struct {
-							MediaContainer struct {
-								Metadata []struct {
-									Title string `json:"title"`
-									Media []struct {
-										Part []struct {
-											Key string `json:"key"`
-										} `json:"part"`
-									} `json:"media"`
-								} `json:"metadata"`
-							} `json:"MediaContainer"`
-						}
-						if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
-							wblog.Error("main", fmt.Sprintf("plex decode failed: %v", err))
-						} else {
-							u, _ := url.Parse(fullURL)
-							token := u.Query().Get("X-Plex-Token")
-
-							for _, m := range pr.MediaContainer.Metadata {
-								if len(m.Media) > 0 && len(m.Media[0].Part) > 0 {
-									trackURL := fmt.Sprintf("%s%s?X-Plex-Token=%s", serverURL, m.Media[0].Part[0].Key, token)
-									targets = append(targets, trackURL)
-									queue = append(queue, plugin.Item{Title: m.Title, URL: "music://plex/" + trackURL})
-								}
-							}
-							wblog.Info("main", fmt.Sprintf("expanded plex playlist to %d tracks", len(targets)))
-						}
-					}
-				}
-			}
-
 			if len(targets) == 0 {
 				wblog.Warn("main", "no playback targets found for music URL")
 				return nil
 			}
-
-			// Run mpv in the background for audio playback.
-			socketPath := filepath.Join(os.TempDir(), "workbench-mpv.sock")
-			args := []string{"--no-video", "--input-ipc-server=" + socketPath}
-			if isShuffle {
-				args = append(args, "--shuffle")
-			}
-			args = append(args, targets...)
-			wblog.Info("main", fmt.Sprintf("spawning mpv with %d targets", len(targets)))
-			cmd := exec.Command("mpv", args...)
-			if err := cmd.Start(); err != nil {
-				wblog.Error("main", fmt.Sprintf("mpv start failed: %v", err))
+			p := player.NewMPV()
+			cmd, err := p.Start(targets, isShuffle)
+			if err != nil {
+				wblog.Error("main", fmt.Sprintf("player start failed: %v", err))
 				return nil
 			}
 			return playbackStartedMsg{
 				cmd:          cmd,
+				player:       p,
 				queue:        queue,
 				providerName: providerName,
 			}
 		}
-
 		cmd := exec.Command("open", item.URL) //nolint:gosec
 		if err := cmd.Run(); err != nil {
 			wblog.Warn("main", fmt.Sprintf("open url=%s err=%v", item.URL, err))
@@ -1299,14 +1187,17 @@ func waitForPlayback(cmd *exec.Cmd) tea.Cmd {
 	}
 }
 
-// watchMPV polls mpv for the current track index and sends a mpvTrackChangedMsg.
-func watchMPV() tea.Cmd {
+// watchPlayer polls the player for the current track index and sends a playerTrackChangedMsg.
+func watchPlayer(p player.Player) tea.Cmd {
 	return tea.Tick(1*time.Second, func(time.Time) tea.Msg {
-		idx, err := queryMPV("playlist-pos-1")
+		if p == nil {
+			return nil
+		}
+		idx, err := p.QueryTrackIndex()
 		if err != nil {
 			return nil
 		}
-		return mpvTrackChangedMsg{index: int(idx) - 1}
+		return playerTrackChangedMsg{index: idx}
 	})
 }
 
@@ -2086,6 +1977,7 @@ func main() {
 		os.Exit(1)
 	}
 }
+
 // loadSearchHistory reads recent searches from ~/.config/workbench/history.json.
 func loadSearchHistory() []string {
 	var history []string
