@@ -16,10 +16,13 @@ import (
 
 // YTDLPResult is a simplified yt-dlp JSON output.
 type YTDLPResult struct {
-	ID       string `json:"id"`
-	Title    string `json:"title"`
-	Uploader string `json:"uploader"`
-	Duration int    `json:"duration"`
+	Type          string `json:"_type"`
+	ID            string `json:"id"`
+	Title         string `json:"title"`
+	Uploader      string `json:"uploader"`
+	Duration      int    `json:"duration"`
+	PlaylistCount int    `json:"playlist_count"`
+	WebpageURL    string `json:"webpage_url"`
 }
 
 func main() {
@@ -66,13 +69,11 @@ func fetch(cfg map[string]any) ([]plugin.Item, error) {
 }
 
 func performSearch(query string) ([]plugin.Item, error) {
-	// Search for music only with --no-playlist (unless we want to support playlists later).
-	// We'll search specifically in the music category.
 	ctx := context.Background()
+	// Use --flat-playlist and remove --no-playlist to allow playlist results.
 	cmd := exec.CommandContext(ctx, "yt-dlp",
 		"ytsearch10:"+query,
 		"--dump-json",
-		"--no-playlist",
 		"--flat-playlist")
 
 	var stdout, stderr bytes.Buffer
@@ -94,13 +95,21 @@ func performSearch(query string) ([]plugin.Item, error) {
 			continue
 		}
 
-		durationStr := fmt.Sprintf("%02d:%02d", res.Duration/60, res.Duration%60)
-		items = append(items, plugin.Item{
+		item := plugin.Item{
 			Title:    res.Title,
 			Subtitle: res.Uploader,
-			Meta:     durationStr + " · YTM",
-			URL:      "music://ytm/" + res.ID,
-		})
+		}
+
+		if res.Type == "playlist" || res.PlaylistCount > 0 {
+			item.Meta = "Playlist · YTM"
+			item.URL = "music://ytm-playlist/" + res.WebpageURL
+		} else {
+			durationStr := fmt.Sprintf("%02d:%02d", res.Duration/60, res.Duration%60)
+			item.Meta = durationStr + " · Track · YTM"
+			item.URL = "music://ytm/" + res.ID
+		}
+
+		items = append(items, item)
 	}
 
 	return items, nil

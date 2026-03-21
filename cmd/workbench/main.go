@@ -144,6 +144,16 @@ type fetchResultMsg struct {
 	err          error
 }
 
+// playbackStartedMsg is sent when a new music player process has started.
+type playbackStartedMsg struct {
+	cmd          *exec.Cmd
+	item         plugin.Item
+	providerName string
+}
+
+// playbackFinishedMsg is sent when a music player process exits.
+type playbackFinishedMsg struct{ cmd *exec.Cmd }
+
 // loginDoneMsg is sent after a sub-shell login command exits.
 type loginDoneMsg struct{ err error }
 
@@ -289,6 +299,11 @@ type model struct {
 	logQuery       string // committed search/filter query
 	logMatches     []int  // line indices matching logQuery (search mode)
 	logMatchCursor int    // index into logMatches for n/N navigation
+
+	// Playback state
+	activePlayer       *exec.Cmd
+	nowPlaying         *plugin.Item
+	nowPlayingProvider string
 }
 
 // allProviderNames returns the ordered unique list of provider names from the
@@ -431,6 +446,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.termH = msg.Height
 
 	case tea.KeyMsg:
+		// Global keys
+		if msg.String() == "ctrl+c" {
+			if m.activePlayer != nil {
+				_ = m.activePlayer.Process.Kill()
+			}
+			return m, tea.Quit
+		}
+
 		// '?' is global — opens help from any mode and returns to the previous mode.
 		if msg.String() == "?" && m.mode != modeHelp {
 			m.prevMode = m.mode
@@ -664,6 +687,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			switch msg.String() {
 			case "q", "ctrl+c":
+				if m.activePlayer != nil {
+					_ = m.activePlayer.Process.Kill()
+				}
 				return m, tea.Quit
 
 			case "/":
@@ -686,7 +712,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Open the selected item's URL.
 				items := m.visibleItems(m.active)
 				if p.cursor >= 0 && p.cursor < len(items) {
-					if cmd := openItem(items[p.cursor]); cmd != nil {
+					item := items[p.cursor]
+					if strings.HasPrefix(item.URL, "music://") && m.activePlayer != nil {
+						_ = m.activePlayer.Process.Kill()
+						m.activePlayer = nil
+						m.nowPlaying = nil
+					}
+					if cmd := openItem(item, p.providerName); cmd != nil {
 						return m, cmd
 					}
 				}
@@ -759,6 +791,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loginErr = msg.err
 		return m, nil
 
+	case playbackStartedMsg:
+		m.activePlayer = msg.cmd
+		m.nowPlaying = &msg.item
+		m.nowPlayingProvider = msg.providerName
+		return m, waitForPlayback(msg.cmd)
+
+	case playbackFinishedMsg:
+		if m.activePlayer == msg.cmd {
+			m.activePlayer = nil
+			m.nowPlaying = nil
+			m.nowPlayingProvider = ""
+		}
+		return m, nil
+
 	case []fetchResultMsg:
 		for _, result := range msg {
 			if idx, ok := m.paneIndex[result.providerName]; ok {
@@ -817,7 +863,7 @@ func runLoginCmd(name string, args ...string) tea.Cmd {
 //
 // The command runs in the background — errors are logged but not surfaced in
 // the TUI, since opening an item is best-effort.
-func openItem(item plugin.Item) tea.Cmd {
+func openItem(item plugin.Item, providerName string) tea.Cmd {
 	if item.URL == "" {
 		return nil
 	}
@@ -829,6 +875,9 @@ func openItem(item plugin.Item) tea.Cmd {
 			if strings.HasPrefix(item.URL, "music://ytm/") {
 				// music://ytm/ID -> YouTube Music URL
 				targets = append(targets, "https://music.youtube.com/watch?v="+strings.TrimPrefix(item.URL, "music://ytm/"))
+			} else if strings.HasPrefix(item.URL, "music://ytm-playlist/") {
+				// music://ytm-playlist/URL -> Direct URL
+				targets = append(targets, strings.TrimPrefix(item.URL, "music://ytm-playlist/"))
 			} else if strings.HasPrefix(item.URL, "music://plex/") {
 				// music://plex/URL -> Raw Plex Stream URL
 				targets = append(targets, strings.TrimPrefix(item.URL, "music://plex/"))
@@ -883,13 +932,14 @@ func openItem(item plugin.Item) tea.Cmd {
 			cmd := exec.Command("mpv", args...)
 			if err := cmd.Start(); err != nil {
 				wblog.Error("main", fmt.Sprintf("mpv failed: %v", err))
-				// We don't have a way to show a popup error easily here without
-				// changing the model state, but we can at least log it.
-			} else {
-				wblog.Info("main", fmt.Sprintf("playing %d item(s) via mpv", len(targets)))
-				go func() { _ = cmd.Wait() }()
+				return nil
 			}
-			return nil
+			wblog.Info("main", fmt.Sprintf("playing %d item(s) via mpv", len(targets)))
+			return playbackStartedMsg{
+				cmd:          cmd,
+				item:         item,
+				providerName: providerName,
+			}
 		}
 
 		cmd := exec.Command("open", item.URL) //nolint:gosec
@@ -897,6 +947,15 @@ func openItem(item plugin.Item) tea.Cmd {
 			wblog.Warn("main", fmt.Sprintf("open url=%s err=%v", item.URL, err))
 		}
 		return nil
+	}
+}
+
+// waitForPlayback finishes waits for the given command to exit and sends a
+// playbackFinishedMsg.
+func waitForPlayback(cmd *exec.Cmd) tea.Cmd {
+	return func() tea.Msg {
+		_ = cmd.Wait()
+		return playbackFinishedMsg{cmd: cmd}
 	}
 }
 
@@ -1345,6 +1404,18 @@ func (m model) renderPane(idx, contentHeight int) string {
 		sb.WriteString(" " + p.spinner.View())
 	}
 	sb.WriteString("\n")
+
+	if m.nowPlaying != nil && m.nowPlayingProvider == p.providerName {
+		title := truncate(m.nowPlaying.Title, 50)
+		sb.WriteString(lipgloss.NewStyle().
+			Foreground(lipgloss.Color("212")).
+			Bold(true).
+			Render("▶ NOW PLAYING: " + title))
+		sb.WriteString("\n")
+		if contentHeight > 0 {
+			contentHeight--
+		}
+	}
 
 	if p.loading {
 		sb.WriteString(p.spinner.View())

@@ -155,7 +155,8 @@ func performSearch(serverURL, token, query, sectionID string) ([]plugin.Item, er
 	}
 	q := u.Query()
 	q.Set("query", query)
-	q.Set("type", "10")
+	// 8=Artist, 9=Album, 10=Track, 15=Playlist
+	q.Set("type", "8,9,10,15")
 	q.Set("X-Plex-Token", token)
 	u.RawQuery = q.Encode()
 
@@ -166,18 +167,35 @@ func performSearch(serverURL, token, query, sectionID string) ([]plugin.Item, er
 
 	var items []plugin.Item
 	for _, m := range resp.MediaContainer.Metadata {
-		if len(m.Media) == 0 || len(m.Media[0].Part) == 0 {
-			continue
+		item := plugin.Item{
+			Title: m.Title,
 		}
 
-		streamURL := fmt.Sprintf("%s%s?X-Plex-Token=%s", serverURL, m.Media[0].Part[0].Key, token)
+		switch m.Type {
+		case "artist":
+			item.Subtitle = "Artist"
+			item.Meta = "Plex"
+			// URL could point to artist's tracks if we had an endpoint
+			// For now, no direct playback for just an artist
+		case "album":
+			item.Subtitle = m.ParentTitle // Artist name for albums
+			item.Meta = "Album"
+			item.URL = fmt.Sprintf("music://plex-playlist/%s/library/metadata/%s/children?X-Plex-Token=%s", url.PathEscape(serverURL), m.RatingKey, token)
+		case "track":
+			if len(m.Media) > 0 && len(m.Media[0].Part) > 0 {
+				item.Subtitle = fmt.Sprintf("%s — %s", m.GrandparentTitle, m.ParentTitle)
+				item.Meta = "Track"
+				item.URL = "music://plex/" + fmt.Sprintf("%s%s?X-Plex-Token=%s", serverURL, m.Media[0].Part[0].Key, token)
+			}
+		case "playlist":
+			item.Subtitle = "Playlist"
+			item.Meta = "Plex"
+			item.URL = fmt.Sprintf("music://plex-playlist/%s/playlists/%s/items?X-Plex-Token=%s", url.PathEscape(serverURL), m.RatingKey, token)
+		}
 
-		items = append(items, plugin.Item{
-			Title:    m.Title,
-			Subtitle: fmt.Sprintf("%s — %s", m.GrandparentTitle, m.ParentTitle),
-			Meta:     "Track",
-			URL:      "music://plex/" + streamURL,
-		})
+		if item.Subtitle != "" {
+			items = append(items, item)
+		}
 	}
 	return items, nil
 }
