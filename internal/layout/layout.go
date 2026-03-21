@@ -96,6 +96,11 @@ func Render(rows []RowConfig, views map[string]string, titles map[string]string,
 			// so Height(h) produces an outer box of h+2 rows (border top+bottom).
 			// We want the outer box to be exactly rowHeight rows, so we pass
 			// rowHeight-2 to Height().
+			innerWidth := paneWidth - 2
+			if innerWidth < 1 {
+				innerWidth = 1
+			}
+
 			innerHeight := rowHeight - 2
 			if innerHeight < 1 {
 				innerHeight = 1
@@ -131,7 +136,7 @@ func Render(rows []RowConfig, views map[string]string, titles map[string]string,
 			}
 
 			style := lipgloss.NewStyle().
-				Width(paneWidth).
+				Width(innerWidth).
 				Height(innerHeight).
 				Border(border).
 				BorderForeground(borderColor).
