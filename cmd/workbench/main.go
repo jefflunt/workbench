@@ -75,6 +75,14 @@ type Config struct {
 	Layout  LayoutConfig              `toml:"layout"`
 }
 
+// PlaybackState is used to persist playback state to disk.
+type PlaybackState struct {
+	Queue        []plugin.Item `json:"queue"`
+	Index        int           `json:"index"`
+	ProviderName string        `json:"provider_name"`
+	Timestamp    float64       `json:"timestamp"`
+}
+
 // defaultConfig returns a sensible default configuration.
 func defaultConfig() Config {
 	return Config{
@@ -308,6 +316,7 @@ type model struct {
 	nowPlayingIndex    int
 	nowPlayingActive   bool
 	nowPlayingProvider string
+	savedPlayback      *PlaybackState
 }
 
 // allProviderNames returns the ordered unique list of provider names from the
@@ -345,6 +354,8 @@ func initialModel(cfg Config, providers map[string]plugin.Provider) model {
 	logInput := textinput.New()
 	logInput.CharLimit = 100
 
+	saved, _ := loadPlayback()
+
 	return model{
 		cfg:           cfg,
 		providers:     providers,
@@ -354,6 +365,7 @@ func initialModel(cfg Config, providers map[string]plugin.Provider) model {
 		termH:         24,
 		logInput:      logInput,
 		logAutoScroll: true,
+		savedPlayback: saved,
 	}
 }
 
@@ -453,6 +465,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Global keys
 		if msg.String() == "ctrl+c" {
 			if m.activePlayer != nil {
+				ts, _ := queryMPV("playback-time")
+				_ = savePlayback(PlaybackState{
+					Queue:        m.nowPlayingQueue,
+					Index:        m.nowPlayingIndex,
+					ProviderName: m.nowPlayingProvider,
+					Timestamp:    ts,
+				})
 				_ = m.activePlayer.Process.Kill()
 			}
 			return m, tea.Quit
@@ -491,6 +510,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.loginErr = nil
 				return m, nil
 			}
+
+		case modeNowPlaying:
+			switch msg.String() {
+			case "esc":
+				m.mode = modeNormal
+			case "j", "down":
+				if m.nowPlayingIndex < len(m.nowPlayingQueue)-1 {
+					m.nowPlayingIndex++
+				}
+			case "k", "up":
+				if m.nowPlayingIndex > 0 {
+					m.nowPlayingIndex--
+				}
+			case " ":
+				if m.activePlayer != nil {
+					sendMPVCommand("cycle", "pause")
+				}
+			case "h":
+				if m.activePlayer != nil {
+					sendMPVCommand("playlist-prev")
+					m.updateNowPlayingIndex(-1)
+				}
+			case "l":
+				if m.activePlayer != nil {
+					sendMPVCommand("playlist-next")
+					m.updateNowPlayingIndex(1)
+				}
+			case "enter":
+				if m.activePlayer != nil {
+					sendMPVCommand("playlist-play-index", fmt.Sprintf("%d", m.nowPlayingIndex))
+				}
+			}
+			return m, nil
 
 		case modeLog:
 			// If we're in a sub-mode (search/filter input), route to it first.
@@ -692,6 +744,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "q", "ctrl+c":
 				if m.activePlayer != nil {
+					ts, _ := queryMPV("playback-time")
+					_ = savePlayback(PlaybackState{
+						Queue:        m.nowPlayingQueue,
+						Index:        m.nowPlayingIndex,
+						ProviderName: m.nowPlayingProvider,
+						Timestamp:    ts,
+					})
 					_ = m.activePlayer.Process.Kill()
 				}
 				return m, tea.Quit
@@ -710,6 +769,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					p.searchCursor = 0
 					p.searchInput.SetValue("")
 					p.searchInput.Blur()
+				} else if m.mode == modeNowPlaying {
+					m.mode = modeNormal
 				}
 
 			case "enter":
@@ -727,10 +788,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 
-			case "n":
+			case "m":
 				if p.searchMode == "s" && len(p.searchMatches) > 0 {
 					p.searchCursor = (p.searchCursor + 1) % len(p.searchMatches)
 					p.cursor = p.searchMatches[p.searchCursor]
+				}
+
+			case "M":
+				if p.searchMode == "s" && len(p.searchMatches) > 0 {
+					p.searchCursor = (p.searchCursor - 1 + len(p.searchMatches)) % len(p.searchMatches)
+					p.cursor = p.searchMatches[p.searchCursor]
+				}
+
+			case "n":
+				if p.providerName == "music-streamer" || p.providerName == "plex" || p.providerName == "ytmusic" {
+					m.mode = modeNowPlaying
 				}
 
 			case "N":
@@ -771,6 +843,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case " ":
 				if m.activePlayer != nil {
 					sendMPVCommand("cycle", "pause")
+				} else if m.savedPlayback != nil {
+					// Resume
+					state := m.savedPlayback
+					m.savedPlayback = nil
+
+					// Re-trigger playback from saved state
+					// Simplified resume: start from index 0
+					item := state.Queue[state.Index]
+					// Add start time to URL for resume?
+					// For now just playing the item.
+					if cmd := openItem(item, state.ProviderName); cmd != nil {
+						return m, cmd
+					}
 				}
 
 			case "s":
@@ -838,7 +923,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.nowPlayingIndex = 0
 		m.nowPlayingActive = true
 		m.nowPlayingProvider = msg.providerName
-		return m, waitForPlayback(msg.cmd)
+		return m, tea.Batch(waitForPlayback(msg.cmd), watchMPV())
 
 	case playbackFinishedMsg:
 		if m.activePlayer == msg.cmd {
@@ -846,7 +931,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.nowPlayingQueue = nil
 			m.nowPlayingActive = false
 			m.nowPlayingProvider = ""
+			m.mode = modeNormal
 		}
+		return m, nil
+
+	case mpvTrackChangedMsg:
+		m.nowPlayingIndex = msg.index
 		return m, nil
 
 	case []fetchResultMsg:
@@ -908,8 +998,68 @@ func runLoginCmd(name string, args ...string) tea.Cmd {
 	})
 }
 
+// queryMPV asks a running mpv instance for property info.
+func queryMPV(property string) (float64, error) {
+	socketPath := filepath.Join(os.TempDir(), "workbench-mpv.sock")
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+
+	type cmd struct {
+		Command []string `json:"command"`
+	}
+	req, _ := json.Marshal(cmd{Command: []string{"get_property", property}})
+	_, err = conn.Write(append(req, '\n'))
+	if err != nil {
+		return 0, err
+	}
+
+	var resp struct {
+		Data float64 `json:"data"`
+	}
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return 0, err
+	}
+	return resp.Data, nil
+}
+
+func savePlayback(state PlaybackState) error {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		dir = filepath.Join(os.Getenv("HOME"), ".cache")
+	}
+	path := filepath.Join(dir, "workbench", "playback.json")
+
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func loadPlayback() (*PlaybackState, error) {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		dir = filepath.Join(os.Getenv("HOME"), ".cache")
+	}
+	path := filepath.Join(dir, "workbench", "playback.json")
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var state PlaybackState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
 // sendMPVCommand sends a JSON IPC command to a running mpv instance.
 func sendMPVCommand(args ...string) {
+
 	socketPath := filepath.Join(os.TempDir(), "workbench-mpv.sock")
 	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
@@ -1038,6 +1188,10 @@ func openItem(item plugin.Item, providerName string) tea.Cmd {
 	}
 }
 
+type mpvTrackChangedMsg struct {
+	index int
+}
+
 // waitForPlayback finishes waits for the given command to exit and sends a
 // playbackFinishedMsg.
 func waitForPlayback(cmd *exec.Cmd) tea.Cmd {
@@ -1045,6 +1199,17 @@ func waitForPlayback(cmd *exec.Cmd) tea.Cmd {
 		_ = cmd.Wait()
 		return playbackFinishedMsg{cmd: cmd}
 	}
+}
+
+// watchMPV polls mpv for the current track index and sends a mpvTrackChangedMsg.
+func watchMPV() tea.Cmd {
+	return tea.Tick(1*time.Second, func(time.Time) tea.Msg {
+		idx, err := queryMPV("playlist-pos-1")
+		if err != nil {
+			return nil
+		}
+		return mpvTrackChangedMsg{index: int(idx) - 1}
+	})
 }
 
 // visibleItems returns items for the given pane, applying the pane's active
@@ -1225,7 +1390,8 @@ func (m model) renderHelpOverlay(base string) string {
 		{"/s <term>", "Search current pane"},
 		{"/f <term>", "Filter (hide non-match)"},
 		{"/F <term>", "Filter (dim non-match)"},
-		{"n / N", "Next / prev match"},
+		{"m / M", "Next / prev match"},
+		{"n", "Now Playing (Music)"},
 		{"esc", "Clear search/filter"},
 	}
 	logPane := []struct{ key, desc string }{
@@ -1246,7 +1412,7 @@ func (m model) renderHelpOverlay(base string) string {
 			{"Space", "Play / Pause"},
 			{"h / l", "Prev / next track"},
 			{"s", "Shuffle"},
-			{"Q", "View Playback Queue"},
+			{"n", "Now Playing (Queue)"},
 		}
 	}
 
@@ -1518,10 +1684,14 @@ func (m model) renderQueueOverlay(base string) string {
 	)
 }
 
-// renderPane produces the content string for a single pane.
-// contentHeight is the number of rows available for content (excluding the
-// border); a value of 0 means unconstrained (used during the dims-only pass).
-func (m model) renderPane(idx, contentHeight int) string {
+func (m *model) updateNowPlayingIndex(delta int) {
+	m.nowPlayingIndex += delta
+	if m.nowPlayingIndex < 0 {
+		m.nowPlayingIndex = 0
+	} else if m.nowPlayingIndex >= len(m.nowPlayingQueue) {
+		m.nowPlayingIndex = len(m.nowPlayingQueue) - 1
+	}
+}
 	p := m.panes[idx]
 	active := idx == m.active
 
