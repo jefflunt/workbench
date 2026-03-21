@@ -16,13 +16,13 @@ import (
 
 // YTDLPResult is a simplified yt-dlp JSON output.
 type YTDLPResult struct {
-	Type          string `json:"_type"`
-	ID            string `json:"id"`
-	Title         string `json:"title"`
-	Uploader      string `json:"uploader"`
-	Duration      int    `json:"duration"`
-	PlaylistCount int    `json:"playlist_count"`
-	WebpageURL    string `json:"webpage_url"`
+	Type          string  `json:"_type"`
+	ID            string  `json:"id"`
+	Title         string  `json:"title"`
+	Uploader      string  `json:"uploader"`
+	Duration      float64 `json:"duration"`
+	PlaylistCount int     `json:"playlist_count"`
+	WebpageURL    string  `json:"webpage_url"`
 }
 
 func main() {
@@ -44,7 +44,7 @@ func fetch(cfg map[string]any, query string) ([]plugin.Item, error) {
 	// Default: Check if yt-dlp is available and connection works
 	if _, err := exec.LookPath("yt-dlp"); err != nil {
 		return []plugin.Item{{
-			Title:       "YouTube Music",
+			Title:       "🟥 YouTube Music",
 			Subtitle:    "yt-dlp not found",
 			Meta:        "ERROR",
 			Highlighted: true,
@@ -56,7 +56,7 @@ func fetch(cfg map[string]any, query string) ([]plugin.Item, error) {
 	resp, err := client.Get("https://www.google.com")
 	if err != nil {
 		return []plugin.Item{{
-			Title:       "YouTube Music",
+			Title:       "🟥 YouTube Music",
 			Subtitle:    "Network error",
 			Meta:        "ERROR",
 			Highlighted: true,
@@ -65,7 +65,7 @@ func fetch(cfg map[string]any, query string) ([]plugin.Item, error) {
 	defer resp.Body.Close()
 
 	return []plugin.Item{{
-		Title:       "YouTube Music",
+		Title:       "🟥 YouTube Music",
 		Subtitle:    "Connected",
 		Meta:        "OK",
 		Highlighted: false,
@@ -77,7 +77,7 @@ func performSearch(query string) ([]plugin.Item, error) {
 	// Use --flat-playlist and remove --no-playlist to allow playlist results.
 	// Add --ignore-errors to skip problematic entries
 	cmd := exec.CommandContext(ctx, "yt-dlp",
-		"ytsearch10:"+query,
+		"ytsearch50:"+query,
 		"--dump-json",
 		"--flat-playlist",
 		"--ignore-errors")
@@ -102,16 +102,17 @@ func performSearch(query string) ([]plugin.Item, error) {
 		}
 
 		item := plugin.Item{
-			Title:    res.Title,
+			Title:    "🟥 " + res.Title,
 			Subtitle: res.Uploader,
 		}
 
-		if res.Type == "playlist" || res.PlaylistCount > 0 {
-			item.Meta = "Playlist · YTM"
+		if res.Type == "playlist" {
+			item.Meta = "Playlist"
 			item.URL = "music://ytm-playlist/" + res.WebpageURL
 		} else {
-			durationStr := fmt.Sprintf("%02d:%02d", res.Duration/60, res.Duration%60)
-			item.Meta = durationStr + " · Track · YTM"
+			d := int(res.Duration)
+			durationStr := fmt.Sprintf("%02d:%02d", d/60, d%60)
+			item.Meta = durationStr + " · Track"
 			item.URL = "music://ytm/" + res.ID
 		}
 

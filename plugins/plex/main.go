@@ -67,7 +67,7 @@ func fetch(cfg map[string]any, query string) ([]plugin.Item, error) {
 	err := checkPlexConnection(serverURL, token)
 	if err != nil {
 		return []plugin.Item{{
-			Title:       "Plex",
+			Title:       "🟧 Plex",
 			Subtitle:    "Connection Error",
 			Meta:        "ERROR",
 			URL:         "",
@@ -91,7 +91,7 @@ func fetch(cfg map[string]any, query string) ([]plugin.Item, error) {
 
 	// Add status as the first item
 	items := []plugin.Item{{
-		Title:       "Plex Server",
+		Title:       "🟧 Plex Server",
 		Subtitle:    "Connected",
 		Meta:        status,
 		URL:         "",
@@ -131,7 +131,7 @@ func fetchPlexPlaylistItems(fullURL, serverURL, token string) ([]plugin.Item, er
 		if len(m.Media) > 0 && len(m.Media[0].Part) > 0 {
 			streamURL := fmt.Sprintf("%s%s?X-Plex-Token=%s", serverURL, m.Media[0].Part[0].Key, token)
 			items = append(items, plugin.Item{
-				Title:    m.Title,
+				Title:    "🟧 " + m.Title,
 				Subtitle: fmt.Sprintf("%s — %s", m.GrandparentTitle, m.ParentTitle),
 				Meta:     "Track",
 				URL:      "music://plex/" + streamURL,
@@ -193,6 +193,7 @@ func performSearch(serverURL, token, query, sectionID string) ([]plugin.Item, er
 	}
 	q := u.Query()
 	q.Set("query", query)
+	q.Set("limit", "50")
 	// 8=Artist, 9=Album, 10=Track, 15=Playlist
 	q.Set("type", "8,9,10,15")
 	q.Set("X-Plex-Token", token)
@@ -206,13 +207,13 @@ func performSearch(serverURL, token, query, sectionID string) ([]plugin.Item, er
 	var items []plugin.Item
 	for _, m := range resp.MediaContainer.Metadata {
 		item := plugin.Item{
-			Title: m.Title,
+			Title: "🟧 " + m.Title,
 		}
 
 		switch m.Type {
 		case "artist":
 			item.Subtitle = "Artist"
-			item.Meta = "Plex"
+			item.Meta = "Artist"
 			item.URL = fmt.Sprintf("music://plex-playlist/%s/library/metadata/%s/allLeaves?X-Plex-Token=%s", url.PathEscape(serverURL), m.RatingKey, token)
 		case "album":
 			item.Subtitle = m.ParentTitle // Artist name for albums
@@ -226,7 +227,7 @@ func performSearch(serverURL, token, query, sectionID string) ([]plugin.Item, er
 			}
 		case "playlist":
 			item.Subtitle = "Playlist"
-			item.Meta = "Plex"
+			item.Meta = "Playlist"
 			item.URL = fmt.Sprintf("music://plex-playlist/%s/playlists/%s/items?X-Plex-Token=%s", url.PathEscape(serverURL), m.RatingKey, token)
 		}
 
@@ -253,9 +254,9 @@ func fetchPlaylists(serverURL, token string) ([]plugin.Item, error) {
 	var items []plugin.Item
 	for _, m := range resp.MediaContainer.Metadata {
 		items = append(items, plugin.Item{
-			Title:    m.Title,
+			Title:    "🟧 " + m.Title,
 			Subtitle: "Playlist",
-			Meta:     "Plex",
+			Meta:     "Playlist",
 			URL:      fmt.Sprintf("music://plex-playlist/%s/%s/items?X-Plex-Token=%s", url.PathEscape(serverURL), m.RatingKey, token),
 		})
 	}

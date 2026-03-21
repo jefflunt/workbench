@@ -63,13 +63,13 @@ func TestFetchPlaylists(t *testing.T) {
 		t.Fatalf("Expected 1 item, got %d", len(items))
 	}
 
-	if items[0].Title != "My Awesome Playlist" {
+	if items[0].Title != "🟧 My Awesome Playlist" {
 		t.Errorf("Expected Title 'My Awesome Playlist', got %q", items[0].Title)
 	}
 	if items[0].Subtitle != "Playlist" {
 		t.Errorf("Expected Subtitle 'Playlist', got %q", items[0].Subtitle)
 	}
-	if items[0].Meta != "Plex" {
-		t.Errorf("Expected Meta 'Plex', got %q", items[0].Meta)
+	if items[0].Meta != "Playlist" {
+		t.Errorf("Expected Meta 'Playlist', got %q", items[0].Meta)
 	}
 }
