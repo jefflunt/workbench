@@ -319,6 +319,8 @@ type model struct {
 	activePlayer       *exec.Cmd
 	nowPlayingQueue    []plugin.Item
 	nowPlayingIndex    int
+	queueCursor        int
+	queueScroll        int
 	nowPlayingActive   bool
 	nowPlayingProvider string
 	savedPlayback      *PlaybackState
@@ -649,12 +651,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc":
 				m.mode = modeNormal
 			case "j", "down":
-				if m.nowPlayingIndex < len(m.nowPlayingQueue)-1 {
-					m.nowPlayingIndex++
+				if m.queueCursor < len(m.nowPlayingQueue)-1 {
+					m.queueCursor++
+				}
+				// Keep cursor in view.
+				innerH := (m.termH * 60 / 100) - 4
+				if innerH < 1 {
+					innerH = 1
+				}
+				if m.queueCursor >= m.queueScroll+innerH {
+					m.queueScroll = m.queueCursor - innerH + 1
 				}
 			case "k", "up":
-				if m.nowPlayingIndex > 0 {
-					m.nowPlayingIndex--
+				if m.queueCursor > 0 {
+					m.queueCursor--
+				}
+				// Keep cursor in view.
+				if m.queueCursor < m.queueScroll {
+					m.queueScroll = m.queueCursor
 				}
 			case " ":
 				if m.activePlayer != nil {
@@ -664,15 +678,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.activePlayer != nil {
 					sendMPVCommand("playlist-prev")
 					m.updateNowPlayingIndex(-1)
+					m.queueCursor = m.nowPlayingIndex
 				}
 			case "l":
 				if m.activePlayer != nil {
 					sendMPVCommand("playlist-next")
 					m.updateNowPlayingIndex(1)
+					m.queueCursor = m.nowPlayingIndex
 				}
 			case "enter":
 				if m.activePlayer != nil {
-					sendMPVCommand("playlist-play-index", fmt.Sprintf("%d", m.nowPlayingIndex+1))
+					sendMPVCommand("playlist-play-index", fmt.Sprintf("%d", m.queueCursor+1))
+					m.nowPlayingIndex = m.queueCursor
 				}
 			}
 			return m, nil
@@ -879,6 +896,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "n":
 				if p.providerName == "music-streamer" || p.providerName == "plex" || p.providerName == "ytmusic" {
 					m.mode = modeNowPlaying
+					m.queueCursor = m.nowPlayingIndex
 				}
 
 			case "J":
@@ -1644,6 +1662,14 @@ func (m model) renderLogOverlay(base string) string {
 func (m model) renderQueueOverlay(base string) string {
 	boxW := m.termW * 60 / 100
 	boxH := m.termH * 60 / 100
+	innerH := boxH - 4 // border + title + padding
+
+	// Clamp scroll window to queueCursor.
+	if m.queueCursor < m.queueScroll {
+		m.queueScroll = m.queueCursor
+	} else if m.queueCursor >= m.queueScroll+innerH {
+		m.queueScroll = m.queueCursor - innerH + 1
+	}
 
 	var sb strings.Builder
 	sb.WriteString(overlayTitleStyle.Render("Now Playing Queue") + "\n\n")
@@ -1651,12 +1677,23 @@ func (m model) renderQueueOverlay(base string) string {
 	if !m.nowPlayingActive || len(m.nowPlayingQueue) == 0 {
 		sb.WriteString(normalStyle.Render("Queue is empty."))
 	} else {
-		for i, item := range m.nowPlayingQueue {
+		end := m.queueScroll + innerH
+		if end > len(m.nowPlayingQueue) {
+			end = len(m.nowPlayingQueue)
+		}
+		for i := m.queueScroll; i < end; i++ {
+			item := m.nowPlayingQueue[i]
 			prefix := "  "
 			if i == m.nowPlayingIndex {
 				prefix = "▶ "
 			}
-			sb.WriteString(prefix + truncate(item.Title, 50) + "\n")
+
+			line := prefix + truncate(item.Title, 50)
+			if i == m.queueCursor {
+				sb.WriteString(selectedStyle.Render(line) + "\n")
+			} else {
+				sb.WriteString(normalStyle.Render(line) + "\n")
+			}
 		}
 	}
 
