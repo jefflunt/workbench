@@ -163,6 +163,13 @@ type playbackStartedMsg struct {
 // playbackFinishedMsg is sent when a music player process exits.
 type playbackFinishedMsg struct{ cmd *exec.Cmd }
 
+// expandResultMsg is sent when a plugin expands an item.
+type expandResultMsg struct {
+	providerName string
+	items        []plugin.Item
+	err          error
+}
+
 // mpvTrackChangedMsg is sent when the mpv playlist index changes.
 type mpvTrackChangedMsg struct {
 	index int
@@ -654,9 +661,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.queueCursor < len(m.nowPlayingQueue)-1 {
 					m.queueCursor++
 				}
+				// Keep cursor in view.
+				innerH := (m.termH * 60 / 100) - 4
+				if innerH < 1 {
+					innerH = 1
+				}
+				if m.queueCursor >= m.queueScroll+innerH {
+					m.queueScroll = m.queueCursor - innerH + 1
+				}
 			case "k", "up":
 				if m.queueCursor > 0 {
 					m.queueCursor--
+				}
+				// Keep cursor in view.
+				if m.queueCursor < m.queueScroll {
+					m.queueScroll = m.queueCursor
 				}
 			case " ":
 				if m.activePlayer != nil {
@@ -723,7 +742,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Pending mode: waiting for s/f/F after '/'.
 			if p.searchMode == "pending" {
 				switch msg.String() {
+				case "a":
+					items := m.visibleItems(m.active)
+					if p.cursor >= 0 && p.cursor < len(items) {
+						item := items[p.cursor]
+						wblog.Info("main", fmt.Sprintf("attempting to add to queue: %s, active: %v", item.Title, m.nowPlayingActive))
+						if m.nowPlayingActive {
+							m.nowPlayingQueue = append(m.nowPlayingQueue, item)
+							wblog.Info("main", "added to queue: "+item.Title)
+						} else {
+							// Optionally allow adding to queue even if not playing?
+							// For now, let's just make it work if active is false but queue exists.
+							m.nowPlayingQueue = append(m.nowPlayingQueue, item)
+							m.nowPlayingActive = true
+							m.nowPlayingProvider = p.providerName
+							wblog.Info("main", "added to queue (was inactive): "+item.Title)
+						}
+					}
+
 				case "s":
+
 					p.searchMode = "s"
 					p.searchQuery = ""
 					p.searchMatches = nil
@@ -872,6 +910,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 
+			case "x":
+				items := m.visibleItems(m.active)
+				if p.cursor >= 0 && p.cursor < len(items) {
+					item := items[p.cursor]
+					prov := m.providers[p.providerName]
+					p.stale = true
+					return m, tea.Batch(p.spinner.Tick, func() tea.Msg {
+						ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+						defer cancel()
+						newItems, err := prov.Expand(ctx, item)
+						return expandResultMsg{
+							providerName: p.providerName,
+							items:        newItems,
+							err:          err,
+						}
+					})
+				}
+
 			case "h":
 				if m.activePlayer != nil {
 					sendMPVCommand("playlist-prev")
@@ -927,6 +983,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case mpvTrackChangedMsg:
 		m.nowPlayingIndex = msg.index
+		return m, watchMPV()
+
+	case expandResultMsg:
+		if idx, ok := m.paneIndex[msg.providerName]; ok {
+			m.panes[idx].loading = false
+			m.panes[idx].stale = false
+			m.panes[idx].items = msg.items
+			m.panes[idx].err = msg.err
+			m.panes[idx].cursor = 0
+		}
 		return m, nil
 
 	case []fetchResultMsg:
@@ -1415,6 +1481,7 @@ func (m model) renderHelpOverlay(base string) string {
 			{"Space", "Play / Pause"},
 			{"h / l", "Prev / next track"},
 			{"s", "Shuffle"},
+			{"a", "Add to Queue"},
 			{"n", "Now Playing (Queue)"},
 		}
 	}

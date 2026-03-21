@@ -43,10 +43,14 @@ var needsFollowUp = map[string]bool{
 }
 
 func main() {
-	plugin.RunPlugin(fetch)
+	plugin.RunPlugin(fetch, expand)
 }
 
-func fetch(cfg map[string]any) ([]plugin.Item, error) {
+func expand(cfg map[string]any, item plugin.Item) ([]plugin.Item, error) {
+	return nil, nil
+}
+
+func fetch(cfg map[string]any, query string) ([]plugin.Item, error) {
 	assignedJQL, _ := cfg["assigned_jql"].(string)
 	watchingJQL, _ := cfg["watching_jql"].(string)
 	limit := 50

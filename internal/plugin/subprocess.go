@@ -90,3 +90,48 @@ func (p *SubprocessProvider) Fetch(ctx context.Context, query string) ([]Item, e
 
 	return resp.Items, nil
 }
+
+// Expand implements Provider.
+func (p *SubprocessProvider) Expand(ctx context.Context, item Item) ([]Item, error) {
+	req := ExpandRequest{
+		Config: p.config,
+		Item:   item,
+	}
+	reqBytes, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("plugin %s: encode expand request: %w", p.name, err)
+	}
+
+	cmd := exec.CommandContext(ctx, p.binaryPath, "expand") //nolint:gosec
+	cmd.Stdin = bytes.NewReader(reqBytes)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err = cmd.Run()
+	stderrStr := stderr.String()
+	if stderrStr != "" {
+		wblog.Info(p.name, fmt.Sprintf("stderr: %s", stderrStr))
+	}
+
+	if err != nil {
+		if stderrStr != "" {
+			return nil, fmt.Errorf("plugin %s: %s", p.name, stderrStr)
+		}
+		wblog.Error(p.name, fmt.Sprintf("failed: %v", err))
+		return nil, fmt.Errorf("plugin %s: %w", p.name, err)
+	}
+
+	var resp FetchResponse
+	if err := json.NewDecoder(&stdout).Decode(&resp); err != nil {
+		wblog.Error(p.name, fmt.Sprintf("failed to decode response: %v", err))
+		return nil, fmt.Errorf("plugin %s: decode response: %w", p.name, err)
+	}
+	if resp.Error != "" {
+		wblog.Error(p.name, fmt.Sprintf("reported error: %s", resp.Error))
+		return nil, fmt.Errorf("plugin %s: %s", p.name, resp.Error)
+	}
+
+	return resp.Items, nil
+}

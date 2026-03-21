@@ -20,16 +20,41 @@ type Backend struct {
 }
 
 func main() {
-	plugin.RunPlugin(fetch)
+	plugin.RunPlugin(fetch, expand)
 }
 
-func fetch(cfg map[string]any) ([]plugin.Item, error) {
+func expand(cfg map[string]any, item plugin.Item) ([]plugin.Item, error) {
+	backendsData, ok := cfg["backends"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("music-streamer: backends list required")
+	}
+
+	for _, bd := range backendsData {
+		bMap, ok := bd.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		backend := Backend{
+			Name:   bMap["name"].(string),
+			Path:   bMap["path"].(string),
+			Config: bMap["config"].(map[string]any),
+		}
+
+		items, err := callBackendExpand(backend, item)
+		if err == nil && len(items) > 0 {
+			return items, nil
+		}
+	}
+	return nil, nil
+}
+
+func fetch(cfg map[string]any, query string) ([]plugin.Item, error) {
 	backendsData, ok := cfg["backends"].([]any)
 	if !ok {
 		return nil, fmt.Errorf("music-streamer: backends list required in [plugins.music-streamer]")
 	}
 
-	query, _ := cfg["query"].(string)
 	fmt.Fprintf(os.Stderr, "music-streamer: received query %q, found %d backends\n", query, len(backendsData))
 
 	var wg sync.WaitGroup
@@ -89,6 +114,38 @@ func callBackend(b Backend, query string) ([]plugin.Item, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, b.Path, "fetch")
+	cmd.Stdin = bytes.NewReader(reqBytes)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("backend error: %w — %s", err, stderr.String())
+	}
+
+	var resp plugin.FetchResponse
+	if err := json.NewDecoder(&stdout).Decode(&resp); err != nil {
+		return nil, fmt.Errorf("failed to decode backend response: %w", err)
+	}
+	if resp.Error != "" {
+		return nil, fmt.Errorf("backend error: %s", resp.Error)
+	}
+
+	return resp.Items, nil
+}
+
+func callBackendExpand(b Backend, item plugin.Item) ([]plugin.Item, error) {
+	req := plugin.ExpandRequest{
+		Config: b.Config,
+		Item:   item,
+	}
+	reqBytes, _ := json.Marshal(req)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, b.Path, "expand")
 	cmd.Stdin = bytes.NewReader(reqBytes)
 
 	var stdout, stderr bytes.Buffer

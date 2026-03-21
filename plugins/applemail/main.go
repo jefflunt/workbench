@@ -29,10 +29,10 @@ const (
 var senderRe = regexp.MustCompile(`^(.+?)\s*<(.+?)>\s*$`)
 
 func main() {
-	plugin.RunPlugin(fetch)
+	plugin.RunPlugin(fetch, nil)
 }
 
-func fetch(cfg map[string]any) ([]plugin.Item, error) {
+func fetch(cfg map[string]any, query string) ([]plugin.Item, error) {
 	accountName, _ := cfg["account_name"].(string)
 	limit := 50
 	if v, ok := cfg["limit"]; ok {

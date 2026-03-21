@@ -36,10 +36,10 @@ type PlexResponse struct {
 }
 
 func main() {
-	plugin.RunPlugin(fetch)
+	plugin.RunPlugin(fetch, expand)
 }
 
-func fetch(cfg map[string]any) ([]plugin.Item, error) {
+func fetch(cfg map[string]any, query string) ([]plugin.Item, error) {
 	serverURL, _ := cfg["server_url"].(string)
 	token, _ := cfg["token"].(string)
 	library, _ := cfg["library"].(string)
@@ -48,7 +48,6 @@ func fetch(cfg map[string]any) ([]plugin.Item, error) {
 		return nil, fmt.Errorf("plex: server_url and token are required in [plugins.plex]")
 	}
 
-	query, _ := cfg["query"].(string)
 	fmt.Fprintf(os.Stderr, "plex: fetching with query %q, library %q\n", query, library)
 
 	sectionID := ""
@@ -100,6 +99,45 @@ func fetch(cfg map[string]any) ([]plugin.Item, error) {
 	}}
 	items = append(items, playlists...)
 
+	return items, nil
+}
+
+func expand(cfg map[string]any, item plugin.Item) ([]plugin.Item, error) {
+	serverURL, _ := cfg["server_url"].(string)
+	token, _ := cfg["token"].(string)
+	if serverURL == "" || token == "" {
+		return nil, fmt.Errorf("plex: server_url and token are required")
+	}
+
+	if strings.HasPrefix(item.URL, "music://plex-playlist/") {
+		parts := strings.SplitN(strings.TrimPrefix(item.URL, "music://plex-playlist/"), "/", 2)
+		if len(parts) == 2 {
+			serverURL, _ := url.QueryUnescape(parts[0])
+			relPath := parts[1]
+			fullURL := serverURL + "/" + relPath
+			return fetchPlexPlaylistItems(fullURL, serverURL, token)
+		}
+	}
+	return nil, nil
+}
+
+func fetchPlexPlaylistItems(fullURL, serverURL, token string) ([]plugin.Item, error) {
+	resp, err := getPlex(fullURL)
+	if err != nil {
+		return nil, err
+	}
+	var items []plugin.Item
+	for _, m := range resp.MediaContainer.Metadata {
+		if len(m.Media) > 0 && len(m.Media[0].Part) > 0 {
+			streamURL := fmt.Sprintf("%s%s?X-Plex-Token=%s", serverURL, m.Media[0].Part[0].Key, token)
+			items = append(items, plugin.Item{
+				Title:    m.Title,
+				Subtitle: fmt.Sprintf("%s — %s", m.GrandparentTitle, m.ParentTitle),
+				Meta:     "Track",
+				URL:      "music://plex/" + streamURL,
+			})
+		}
+	}
 	return items, nil
 }
 

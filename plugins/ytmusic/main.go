@@ -26,11 +26,15 @@ type YTDLPResult struct {
 }
 
 func main() {
-	plugin.RunPlugin(fetch)
+	plugin.RunPlugin(fetch, expand)
 }
 
-func fetch(cfg map[string]any) ([]plugin.Item, error) {
-	query, _ := cfg["query"].(string)
+func expand(cfg map[string]any, item plugin.Item) ([]plugin.Item, error) {
+	// YTM doesn't currently support expanding playlists via yt-dlp in this plugin.
+	return nil, nil
+}
+
+func fetch(cfg map[string]any, query string) ([]plugin.Item, error) {
 	fmt.Fprintf(os.Stderr, "ytmusic: fetching with query %q\n", query)
 
 	if query != "" {
@@ -71,10 +75,12 @@ func fetch(cfg map[string]any) ([]plugin.Item, error) {
 func performSearch(query string) ([]plugin.Item, error) {
 	ctx := context.Background()
 	// Use --flat-playlist and remove --no-playlist to allow playlist results.
+	// Add --ignore-errors to skip problematic entries
 	cmd := exec.CommandContext(ctx, "yt-dlp",
 		"ytsearch10:"+query,
 		"--dump-json",
-		"--flat-playlist")
+		"--flat-playlist",
+		"--ignore-errors")
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

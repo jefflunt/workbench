@@ -25,10 +25,14 @@ import (
 )
 
 func main() {
-	plugin.RunPlugin(fetch)
+	plugin.RunPlugin(fetch, expand)
 }
 
-func fetch(cfg map[string]any) ([]plugin.Item, error) {
+func expand(cfg map[string]any, item plugin.Item) ([]plugin.Item, error) {
+	return nil, nil
+}
+
+func fetch(cfg map[string]any, query string) ([]plugin.Item, error) {
 	token, _ := cfg["token"].(string)
 
 	ctx := context.Background()

@@ -6,40 +6,51 @@ import (
 	"os"
 )
 
-// RunPlugin is the entrypoint helper for plugin binaries.  Call it from
-// main() passing a fetch function that accepts a config map and returns items
-// or an error.
-//
-// Usage in a plugin binary:
-//
-//	func main() {
-//	    plugin.RunPlugin(func(cfg map[string]any) ([]plugin.Item, error) {
-//	        // read cfg, do work, return items
-//	    })
-//	}
-//
-// RunPlugin reads a FetchRequest from stdin, calls fetch, writes a
-// FetchResponse to stdout, and exits.  Any error causes a non-zero exit.
-func RunPlugin(fetch func(cfg map[string]any) ([]Item, error)) {
-	if len(os.Args) < 2 || os.Args[1] != "fetch" {
-		fmt.Fprintf(os.Stderr, "usage: %s fetch\n", os.Args[0])
+// RunPlugin is the entrypoint helper for plugin binaries.
+func RunPlugin(fetch func(cfg map[string]any, query string) ([]Item, error), expand func(cfg map[string]any, item Item) ([]Item, error)) {
+	if len(os.Args) < 2 {
+		fmt.Fprintf(os.Stderr, "usage: %s <fetch|expand>\n", os.Args[0])
 		os.Exit(2)
 	}
 
-	var req FetchRequest
-	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
-		fmt.Fprintf(os.Stderr, "plugin: decode request: %v\n", err)
-		os.Exit(1)
-	}
+	mode := os.Args[1]
+	var items []Item
+	var err error
+	var config map[string]any
 
-	if req.Config == nil {
-		req.Config = make(map[string]any)
-	}
-	if req.Query != "" {
-		req.Config["query"] = req.Query
-	}
+	switch mode {
+	case "fetch":
+		var req FetchRequest
+		if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
+			fmt.Fprintf(os.Stderr, "plugin: decode fetch request: %v\n", err)
+			os.Exit(1)
+		}
+		config = req.Config
+		if config == nil {
+			config = make(map[string]any)
+		}
+		items, err = fetch(config, req.Query)
 
-	items, err := fetch(req.Config)
+	case "expand":
+		if expand == nil {
+			fmt.Fprintf(os.Stderr, "plugin: expand not supported\n")
+			os.Exit(1)
+		}
+		var req ExpandRequest
+		if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
+			fmt.Fprintf(os.Stderr, "plugin: decode expand request: %v\n", err)
+			os.Exit(1)
+		}
+		config = req.Config
+		if config == nil {
+			config = make(map[string]any)
+		}
+		items, err = expand(config, req.Item)
+
+	default:
+		fmt.Fprintf(os.Stderr, "unknown command: %s\n", mode)
+		os.Exit(2)
+	}
 
 	resp := FetchResponse{Items: items}
 	if err != nil {

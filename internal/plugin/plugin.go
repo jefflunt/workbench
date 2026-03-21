@@ -51,6 +51,13 @@ type FetchRequest struct {
 	Query string `json:"query,omitempty"`
 }
 
+// ExpandRequest is written to a plugin's stdin when workbench invokes it
+// for expansion.
+type ExpandRequest struct {
+	Config map[string]any `json:"config"`
+	Item   Item           `json:"item"`
+}
+
 // FetchResponse is what a plugin must write to stdout before exiting.
 type FetchResponse struct {
 	// Items is the list of items to display in the pane.
@@ -66,4 +73,5 @@ type FetchResponse struct {
 type Provider interface {
 	Name() string
 	Fetch(ctx context.Context, query string) ([]Item, error)
+	Expand(ctx context.Context, item Item) ([]Item, error)
 }
