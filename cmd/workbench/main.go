@@ -171,6 +171,13 @@ type expandResultMsg struct {
 	err          error
 }
 
+// deleteFinishedMsg is sent when a plugin finishes deleting an item.
+type deleteFinishedMsg struct {
+	providerName string
+	item         plugin.Item
+	err          error
+}
+
 // playerTrackChangedMsg is sent when the player playlist index changes.
 type playerTrackChangedMsg struct {
 	index int
@@ -941,7 +948,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 
-			case "delete":
+			case "delete", "backspace":
 				items := m.visibleItems(m.active)
 				if p.cursor >= 0 && p.cursor < len(items) {
 					item := items[p.cursor]
@@ -951,17 +958,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 						defer cancel()
 						err := prov.Delete(ctx, item)
-						wblog.Info("main", fmt.Sprintf("delete result for %s: %v", item.Title, err))
-						if err != nil {
-							return expandResultMsg{
-								providerName: p.providerName,
-								err:          err,
-							}
-						}
-						// Refresh pane after delete
-						return []fetchResultMsg{{
+						return deleteFinishedMsg{
 							providerName: p.providerName,
-						}}
+							item:         item,
+							err:          err,
+						}
 					})
 				}
 			case "x":
@@ -1040,6 +1041,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case playerTrackChangedMsg:
 		m.nowPlayingIndex = msg.index
 		return m, watchPlayer(m.activePlayer)
+
+	case deleteFinishedMsg:
+		if idx, ok := m.paneIndex[msg.providerName]; ok {
+			p := &m.panes[idx]
+			p.stale = false // done loading
+			if msg.err != nil {
+				p.err = msg.err
+			} else {
+				// Remove item
+				newItems := make([]plugin.Item, 0, len(p.items)-1)
+				for _, it := range p.items {
+					if it.URL != msg.item.URL {
+						newItems = append(newItems, it)
+					}
+				}
+				p.items = newItems
+				// Adjust cursor
+				if p.cursor >= len(newItems) && len(newItems) > 0 {
+					p.cursor = len(newItems) - 1
+				}
+			}
+		}
+		return m, nil
 
 	case expandResultMsg:
 		if idx, ok := m.paneIndex[msg.providerName]; ok {
@@ -1398,7 +1422,7 @@ func (m model) renderHelpOverlay(base string) string {
 		{"k / ↑", "Move cursor up"},
 		{"J / K", "Cursor ±10"},
 		{"Enter", "Open selected item"},
-		{"Delete", "Delete selected item"},
+		{"Delete / Backspace", "Delete selected item"},
 		{"R", "Refresh all panes"},
 		{"L then g/a", "Login (GitHub/Jira)"},
 		{"Ctrl+L", "Open log pane"},
