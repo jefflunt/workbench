@@ -135,3 +135,37 @@ func (p *SubprocessProvider) Expand(ctx context.Context, item Item) ([]Item, err
 
 	return resp.Items, nil
 }
+
+// Delete implements Provider.
+func (p *SubprocessProvider) Delete(ctx context.Context, item Item) error {
+	req := DeleteRequest{
+		Config: p.config,
+		Item:   item,
+	}
+	reqBytes, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("plugin %s: encode delete request: %w", p.name, err)
+	}
+
+	cmd := exec.CommandContext(ctx, p.binaryPath, "delete") //nolint:gosec
+	cmd.Stdin = bytes.NewReader(reqBytes)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	err = cmd.Run()
+	stderrStr := stderr.String()
+	if stderrStr != "" {
+		wblog.Info(p.name, fmt.Sprintf("stderr: %s", stderrStr))
+	}
+
+	if err != nil {
+		if stderrStr != "" {
+			return fmt.Errorf("plugin %s: %s", p.name, stderrStr)
+		}
+		wblog.Error(p.name, fmt.Sprintf("failed: %v", err))
+		return fmt.Errorf("plugin %s: %w", p.name, err)
+	}
+
+	return nil
+}

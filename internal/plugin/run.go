@@ -7,9 +7,9 @@ import (
 )
 
 // RunPlugin is the entrypoint helper for plugin binaries.
-func RunPlugin(fetch func(cfg map[string]any, query string) ([]Item, error), expand func(cfg map[string]any, item Item) ([]Item, error)) {
+func RunPlugin(fetch func(cfg map[string]any, query string) ([]Item, error), expand func(cfg map[string]any, item Item) ([]Item, error), delete func(cfg map[string]any, item Item) error) {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: %s <fetch|expand>\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "usage: %s <fetch|expand|delete>\n", os.Args[0])
 		os.Exit(2)
 	}
 
@@ -46,6 +46,22 @@ func RunPlugin(fetch func(cfg map[string]any, query string) ([]Item, error), exp
 			config = make(map[string]any)
 		}
 		items, err = expand(config, req.Item)
+
+	case "delete":
+		if delete == nil {
+			fmt.Fprintf(os.Stderr, "plugin: delete not supported\n")
+			os.Exit(1)
+		}
+		var req DeleteRequest
+		if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
+			fmt.Fprintf(os.Stderr, "plugin: decode delete request: %v\n", err)
+			os.Exit(1)
+		}
+		config = req.Config
+		if config == nil {
+			config = make(map[string]any)
+		}
+		err = delete(config, req.Item)
 
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", mode)

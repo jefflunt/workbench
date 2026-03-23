@@ -58,6 +58,13 @@ type ExpandRequest struct {
 	Item   Item           `json:"item"`
 }
 
+// DeleteRequest is written to a plugin's stdin when workbench invokes it
+// for deletion.
+type DeleteRequest struct {
+	Config map[string]any `json:"config"`
+	Item   Item           `json:"item"`
+}
+
 // FetchResponse is what a plugin must write to stdout before exiting.
 type FetchResponse struct {
 	// Items is the list of items to display in the pane.
@@ -74,4 +81,5 @@ type Provider interface {
 	Name() string
 	Fetch(ctx context.Context, query string) ([]Item, error)
 	Expand(ctx context.Context, item Item) ([]Item, error)
+	Delete(ctx context.Context, item Item) error
 }

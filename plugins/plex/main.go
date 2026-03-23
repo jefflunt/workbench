@@ -36,7 +36,7 @@ type PlexResponse struct {
 }
 
 func main() {
-	plugin.RunPlugin(fetch, expand)
+	plugin.RunPlugin(fetch, expand, nil)
 }
 
 func fetch(cfg map[string]any, query string) ([]plugin.Item, error) {

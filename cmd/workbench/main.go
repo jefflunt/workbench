@@ -941,6 +941,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 
+			case "delete":
+				items := m.visibleItems(m.active)
+				if p.cursor >= 0 && p.cursor < len(items) {
+					item := items[p.cursor]
+					prov := m.providers[p.providerName]
+					p.stale = true
+					return m, tea.Batch(p.spinner.Tick, func() tea.Msg {
+						ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+						defer cancel()
+						err := prov.Delete(ctx, item)
+						wblog.Info("main", fmt.Sprintf("delete result for %s: %v", item.Title, err))
+						if err != nil {
+							return expandResultMsg{
+								providerName: p.providerName,
+								err:          err,
+							}
+						}
+						// Refresh pane after delete
+						return []fetchResultMsg{{
+							providerName: p.providerName,
+						}}
+					})
+				}
 			case "x":
 				items := m.visibleItems(m.active)
 				if p.cursor >= 0 && p.cursor < len(items) {
@@ -1106,7 +1129,6 @@ func runLoginCmd(name string, args ...string) tea.Cmd {
 	})
 }
 
-
 func savePlayback(state PlaybackState) error {
 	dir, err := os.UserCacheDir()
 	if err != nil {
@@ -1138,7 +1160,6 @@ func loadPlayback() (*PlaybackState, error) {
 	}
 	return &state, nil
 }
-
 
 func openItem(item plugin.Item, providerName string) tea.Cmd {
 	if item.URL == "" {
@@ -1377,6 +1398,7 @@ func (m model) renderHelpOverlay(base string) string {
 		{"k / ↑", "Move cursor up"},
 		{"J / K", "Cursor ±10"},
 		{"Enter", "Open selected item"},
+		{"Delete", "Delete selected item"},
 		{"R", "Refresh all panes"},
 		{"L then g/a", "Login (GitHub/Jira)"},
 		{"Ctrl+L", "Open log pane"},

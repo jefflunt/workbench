@@ -33,6 +33,10 @@ func (m *mockProvider) Expand(ctx context.Context, item Item) ([]Item, error) {
 	return []Item{}, nil
 }
 
+func (m *mockProvider) Delete(ctx context.Context, item Item) error {
+	return nil
+}
+
 func TestProviderInterface(t *testing.T) {
 	var _ Provider = &mockProvider{}
 }

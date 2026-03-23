@@ -43,7 +43,7 @@ var needsFollowUp = map[string]bool{
 }
 
 func main() {
-	plugin.RunPlugin(fetch, expand)
+	plugin.RunPlugin(fetch, expand, nil)
 }
 
 func expand(cfg map[string]any, item plugin.Item) ([]plugin.Item, error) {

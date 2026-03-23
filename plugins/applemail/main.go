@@ -29,7 +29,29 @@ const (
 var senderRe = regexp.MustCompile(`^(.+?)\s*<(.+?)>\s*$`)
 
 func main() {
-	plugin.RunPlugin(fetch, nil)
+	plugin.RunPlugin(fetch, nil, deleteMail)
+}
+
+func deleteMail(cfg map[string]any, item plugin.Item) error {
+	accountName, _ := cfg["account_name"].(string)
+	if accountName == "" {
+		return fmt.Errorf("applemail: account_name required")
+	}
+
+	// item.URL is "message://%3Cmessage-id%3E"
+	// We need to extract the message id.
+	id := strings.TrimPrefix(item.URL, "message://%3C")
+	id = strings.TrimSuffix(id, "%3E")
+	id = strings.ReplaceAll(id, "%3E", ">") // Just in case, though unlikely.
+
+	script := fmt.Sprintf(`tell application "Mail"
+  set acct to account "%s"
+  set msg to first message of mailbox "Inbox" of acct whose message id is "%s"
+  delete msg
+end tell`, escapeAS(accountName), escapeAS(id))
+
+	_, err := runAppleScript(script)
+	return err
 }
 
 func fetch(cfg map[string]any, query string) ([]plugin.Item, error) {
